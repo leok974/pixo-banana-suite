@@ -1,0 +1,23 @@
+{
+  "title": "sprite_pose",
+  "nodes": {
+    "load_image": {
+      "class_type": "LoadImage",
+      "inputs": {
+        "image": "{{image_path}}"
+      }
+    },
+    "pose": {
+      "class_type": "PoseNode",
+      "inputs": {
+        "name": "{{pose}}"
+      }
+    },
+    "save": {
+      "class_type": "SaveImage",
+      "inputs": {
+        "filename": "{{out}}/{{basename}}_{{pose}}.png"
+      }
+    }
+  }
+}
