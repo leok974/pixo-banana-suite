@@ -7,6 +7,9 @@ export default {
   theme: {
     extend: {
       colors: {
+  border: 'hsl(var(--border))',
+  background: 'hsl(var(--background))',
+  foreground: 'hsl(var(--foreground))',
         zinc: {
           950: '#09090b',
         },
