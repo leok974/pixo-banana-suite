@@ -67,6 +67,8 @@ def _kind_for_path(p: Path) -> str:
     name = p.name.lower()
     if name.endswith(".gif"):
         return "gif"
+    if name.endswith(".json") and "sheet" in name:
+        return "atlas"
     if "sheet" in name and name.endswith((".png", ".webp")):
         return "sprite_sheet"
     return "image"
@@ -78,6 +80,9 @@ def _dir_times(dir_path: Path) -> Tuple[float, float]:
     if not mtimes:
         return (now, now)
     return (min(mtimes), max(mtimes))
+
+def _posix(s: str) -> str:
+    return s.replace("\\", "/")
 
 @router.get("/status")
 def status(
@@ -102,10 +107,11 @@ def status(
             for f in sub.rglob("*"):
                 if f.is_file():
                     rel = f.as_posix()
+                    url = ("/view/" + os.path.relpath(f, base).replace("\\", "/")) if resolve_urls else None
                     files.append({
                         "kind": _kind_for_path(f),
                         "path": rel,
-                        "url": ("/view/" + os.path.relpath(f, base).replace("\\", "/")) if resolve_urls else None,
+                        "url": url,
                     })
             jobs.append({
                 "job_id": sub.name,
@@ -219,13 +225,16 @@ def poses_pipeline(req: PosesPipelineRequest):
         use_fixed = bool(req.fixed_cell and req.cell_w and req.cell_h)
         frame_size = (int(req.cell_w), int(req.cell_h)) if use_fixed else None
         sheet_path_str = (out_dir / f"{base}_sheet.png").as_posix()
-        create_sprite_sheet(
+        atlas_path_str = (out_dir / f"{base}_sheet.json").as_posix()
+        sheet_path_str, atlas = create_sprite_sheet(
             {k: list(v) for k, v in pose_frame_map.items()},
             out_sheet_path=sheet_path_str,
             sheet_cols=req.sheet_cols or 3,
             fixed_cell=use_fixed,
             cell_w=frame_size[0] if frame_size else None,
             cell_h=frame_size[1] if frame_size else None,
+            out_atlas_path=atlas_path_str,
+            atlas_basename=base,
         )
 
         # Choose which pose to animate (request override or first non-empty)
@@ -241,6 +250,7 @@ def poses_pipeline(req: PosesPipelineRequest):
         flat_frames = [p for v in pose_frame_map.values() for p in v]
         rel_frames = [rel(Path(f)) for f in flat_frames]
         rel_sheet = rel(Path(sheet_path_str))
+        rel_atlas = rel(Path(atlas_path_str))
         rel_gif = rel(Path(gif_path_str))
 
         def to_url(relpath: str) -> str:
@@ -250,25 +260,35 @@ def poses_pipeline(req: PosesPipelineRequest):
         # by-pose map with relative paths (for UI to reuse)
         rel_by_pose: Dict[str, List[str]] = {k: [rel(Path(p)) for p in v] for k, v in pose_frame_map.items()}
 
+        # Canonicalize to forward slashes before returning
+        rel_frames = [_posix(p) for p in rel_frames]
+        rel_by_pose = {k: [_posix(p) for p in v] for k, v in rel_by_pose.items()}
+        rel_sheet = _posix(rel_sheet)
+        rel_gif = _posix(rel_gif)
+        rel_atlas = _posix(rel_atlas)
+
         payload = {
-            "job_id": f"poses-{int(time.time())}-{base}",
-            "frames": rel_frames,
-            "by_pose": rel_by_pose,
-            "sprite_sheet": rel_sheet,
-            "gif": rel_gif,
-            "gif_pose": pose_for_gif,
-            "basename": base,
-            "edit_info": edit_info,
-            "sheet_options": {
-                "fixed_cell": use_fixed,
-                "cell_w": frame_size[0] if frame_size else None,
-                "cell_h": frame_size[1] if frame_size else None
-            },
-            "urls": {
-                "frames": [to_url(f) for f in rel_frames],
-                "sprite_sheet": to_url(rel_sheet),
-                "gif": to_url(rel_gif),
-            }
+                "job_id": f"poses-{int(time.time())}-{base}",
+                "frames": rel_frames,
+                "by_pose": rel_by_pose,
+                "sprite_sheet": rel_sheet,
+                "gif": rel_gif,
+                "atlas_path": rel_atlas,
+                "atlas": atlas,
+                "gif_pose": pose_for_gif,
+                "basename": base,
+                "edit_info": edit_info,
+                "sheet_options": {
+                    "fixed_cell": use_fixed,
+                    "cell_w": frame_size[0] if frame_size else None,
+                    "cell_h": frame_size[1] if frame_size else None
+                },
+                "urls": {
+                    "frames": [to_url(f) for f in rel_frames],
+                    "sprite_sheet": to_url(rel_sheet),
+                    "atlas": to_url(rel_atlas),
+                    "gif": to_url(rel_gif),
+                }
         }
         return payload
 

@@ -121,6 +121,7 @@ export async function postAnimate(body: {
     fixed_cell?: boolean
     cell_w?: number
     cell_h?: number
+    normalize_existing?: boolean
   }[]
 }): Promise<any> {
   return request('/animate', {
@@ -138,6 +139,8 @@ export async function postPoses(body: {
   fixed_cell?: boolean
   cell_w?: number
   cell_h?: number
+  pose_for_gif?: string
+  normalize_existing?: boolean
 }): Promise<any> {
   return request('/pipeline/poses', {
     method: 'POST',
@@ -154,4 +157,29 @@ export async function agentChat(payload: {
     method: 'POST',
     body: JSON.stringify(payload),
   })
+}
+
+// Atlas metadata type returned by backend when sprite sheet is generated
+export type AtlasMeta = {
+  meta: {
+    app: string
+    image: string
+    size: { w: number; h: number }
+    scale: string
+    cell: { w: number; h: number }
+    fixed_cell: boolean
+    columns: number
+  }
+  frames: Array<{
+    filename: string
+    pose: string
+    index: number
+    frame: { x: number; y: number; w: number; h: number }
+    rotated: boolean
+    trimmed: boolean
+    spriteSourceSize: { x: number; y: number; w: number; h: number }
+    sourceSize: { w: number; h: number }
+    pivot: { x: number; y: number }
+    src: string
+  }>
 }

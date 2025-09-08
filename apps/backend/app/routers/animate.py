@@ -52,13 +52,16 @@ def animate(req: AnimateRequest):
 
     # Build sprite sheet (row-per-pose)
     sheet_path = (out_dir / f"{item.basename}_sheet.png").as_posix()
-    create_sprite_sheet(
+    atlas_path = (out_dir / f"{item.basename}_sheet.json").as_posix()
+    sheet_path, atlas = create_sprite_sheet(
       by_pose,
       out_sheet_path=sheet_path,
       sheet_cols=item.sheet_cols or 4,
       fixed_cell=bool(item.fixed_cell),
       cell_w=item.cell_w,
       cell_h=item.cell_h,
+      out_atlas_path=atlas_path,
+      atlas_basename=item.basename,
     )
 
     # Pick which pose to animate into GIF
@@ -75,6 +78,8 @@ def animate(req: AnimateRequest):
       "gif_pose": gif_pose,
       "frames_used": sum(len(v) for v in by_pose.values()),
       "poses": list(by_pose.keys()),
+  "atlas_path": atlas_path,
+  "atlas": atlas,
     })
 
   return {"items": results}

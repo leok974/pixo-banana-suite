@@ -1,6 +1,8 @@
 ﻿// apps/web/src/components/ChatDock.tsx
 import { useEffect, useMemo, useRef, useState } from "react"
 import { pingAPI, fetchRoots, postPoses, postEdit, postAnimate } from "../lib/api"
+import AtlasViewer from './AtlasViewer'
+import type { AtlasMeta } from '@/lib/api'
 import { agentChat } from "../lib/api"
 
 type Msg = { role: "user" | "assistant" | "system"; content: string; ts: number }
@@ -28,7 +30,10 @@ export function ChatDock() {
   const [preset, setPreset] = useState<"auto"|"64"|"96"|"128"|"256"|"custom">("auto")
   const [preview, setPreview] = useState<{sheet?: string; gif?: string} | null>(null)
   const [lastByPose, setLastByPose] = useState<Record<string, string[]> | null>(null)
+  const [lastAtlas, setLastAtlas] = useState<AtlasMeta | null>(null)
+  const [lastSheetUrl, setLastSheetUrl] = useState<string | null>(null)
   const [gifPose, setGifPose] = useState<string | null>(null)
+  const [poseFilter, setPoseFilter] = useState<string | null>(null)
 
   // Pose selection state
   const POSE_LIST = [
@@ -124,7 +129,11 @@ export function ChatDock() {
           setLastByPose(bp)
           const first = Object.keys(bp)[0]
           setGifPose(first || null)
+          setPoseFilter(first || null)
         }
+        if ((r as any)?.atlas) setLastAtlas((r as any).atlas as AtlasMeta)
+        if ((r as any)?.urls?.sprite_sheet) setLastSheetUrl((r as any).urls.sprite_sheet as string)
+        else if ((r as any)?.sprite_sheet) setLastSheetUrl((r as any).sprite_sheet as string)
         const u = (r as any)?.edit_info?.used_model
         const reason = (r as any)?.edit_info?.reason
         const edited = (r as any)?.edit_info?.edited_path
@@ -186,6 +195,11 @@ export function ChatDock() {
             }
         const r = await postAnimate(payload as any)
         const item = (r as any)?.items?.[0]
+        if (item?.atlas) setLastAtlas(item.atlas as AtlasMeta)
+        if (item?.sprite_sheet) {
+          const ss: string = item.sprite_sheet
+          setLastSheetUrl(ss.startsWith('/view') ? ss : `/view/${ss.split('assets/outputs/').pop()}`)
+        }
         if (item?.gif || item?.sprite_sheet) {
           return [
             "Animate → done",
@@ -455,6 +469,46 @@ export function ChatDock() {
                 <div className="text-[10px] text-zinc-500">
                   Click to open full size. (Served from <code>/view</code>)
                 </div>
+              </div>
+            )}
+
+            {/* Atlas toolbar */}
+            {lastAtlas && (
+              <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-2 mt-2">
+                <div className="flex items-center gap-3">
+                  <span className="text-sm opacity-80">Pose filter</span>
+                  <select
+                    className="rounded bg-zinc-900 border border-zinc-700 px-2 py-1"
+                    value={poseFilter ?? ''}
+                    onChange={(e)=> setPoseFilter(e.target.value || null)}
+                  >
+                    {Array.from(new Set(lastAtlas.frames.map(f => f.pose))).map(p => (
+                      <option key={p} value={p}>{p}</option>
+                    ))}
+                  </select>
+                  <button
+                    className="ml-auto px-3 py-1.5 rounded-lg border border-zinc-700 hover:bg-zinc-800"
+                    onClick={() => {
+                      if (!lastAtlas) return
+                      const blob = new Blob([JSON.stringify(lastAtlas, null, 2)], { type: 'application/json' })
+                      const url = URL.createObjectURL(blob)
+                      const a = document.createElement('a')
+                      a.href = url
+                      a.download = `${lastAtlas.meta?.image?.replace(/\.(png|webp)$/i, '') || 'sheet'}.json`
+                      a.click()
+                      URL.revokeObjectURL(url)
+                    }}
+                  >
+                    Download atlas JSON
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Atlas viewer */}
+            {lastAtlas && lastSheetUrl && (
+              <div className="mt-3">
+                <AtlasViewer sheetUrl={lastSheetUrl} atlas={lastAtlas} poseFilter={poseFilter} />
               </div>
             )}
 

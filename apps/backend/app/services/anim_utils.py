@@ -9,6 +9,7 @@ from PIL import Image, ImageChops, ImageSequence
 import imageio.v2 as imageio
 import os
 import re
+import json
 
 
 def _ensure_dir(p: Path) -> None:
@@ -139,7 +140,9 @@ def create_sprite_sheet(
     fixed_cell: bool = False,
     cell_w: Optional[int] = None,
     cell_h: Optional[int] = None,
-) -> str:
+    out_atlas_path: Optional[str] = None,
+    atlas_basename: Optional[str] = None,
+) -> Tuple[str, Dict[str, Any]]:
     """
     Build a row-per-pose sprite sheet. Each row = one pose, left→right frames.
     If fixed_cell=True, every cell is (cell_w x cell_h); otherwise infer max WxH across all frames.
@@ -147,19 +150,23 @@ def create_sprite_sheet(
     """
     poses = [k for k, v in frames_by_pose.items() if v]
     if not poses:
-        return out_sheet_path
+        return out_sheet_path, {}
 
     rows: List[List[Image.Image]] = []
     max_cols = 1
+    # Keep original file paths per row for atlas
+    row_paths: List[List[str]] = []
     for pose in poses:
-        imgs = _load_images(frames_by_pose[pose])
+        pose_paths = frames_by_pose[pose]
+        imgs = _load_images(pose_paths)
         if not imgs:
             continue
         rows.append(imgs)
+        row_paths.append(pose_paths)
         max_cols = max(max_cols, len(imgs))
 
     if not rows:
-        return out_sheet_path
+        return out_sheet_path, {}
 
     # Determine cell size
     if fixed_cell and cell_w and cell_h:
@@ -168,10 +175,27 @@ def create_sprite_sheet(
         cw = max(img.width for r in rows for img in r)
         ch = max(img.height for r in rows for img in r)
 
+    # Respect requested columns; width uses the requested count (at least 1), not exceeding max_cols
+    cols = max(int(sheet_cols) if sheet_cols else 1, 1)
     # Sheet size
-    W = max_cols * cw
+    W = cols * cw
     H = len(rows) * ch
     sheet = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+
+    # Atlas data structure
+    sheet_name = Path(out_sheet_path).name
+    atlas: Dict[str, Any] = {
+        "meta": {
+            "app": "Pixel Banana Suite",
+            "image": sheet_name,
+            "size": {"w": W, "h": H},
+            "scale": "1",
+            "cell": {"w": cw, "h": ch},
+            "fixed_cell": bool(fixed_cell),
+            "columns": cols,
+        },
+        "frames": [],
+    }
 
     for r, imgs in enumerate(rows):
         for c, img in enumerate(imgs):
@@ -184,9 +208,38 @@ def create_sprite_sheet(
             else:
                 sheet.paste(img, (x, y), img)
 
+            # Atlas record for each frame
+            src_path = row_paths[r][c].replace("\\", "/")
+            pose_name = poses[r]
+            frame_idx = c + 1  # 1-based
+            sprite_src = {
+                "x": (ox - x) if fixed_cell else 0,
+                "y": (oy - y) if fixed_cell else 0,
+                "w": img.width,
+                "h": img.height,
+            }
+            atlas["frames"].append({
+                "filename": f"{(atlas_basename or pose_name)}/{Path(src_path).name}",
+                "pose": pose_name,
+                "index": frame_idx,
+                "frame": {"x": x, "y": y, "w": cw, "h": ch},
+                "rotated": False,
+                "trimmed": bool(fixed_cell),
+                "spriteSourceSize": sprite_src,
+                "sourceSize": {"w": img.width, "h": img.height},
+                "pivot": {"x": 0.5, "y": 0.5},
+                "src": src_path,
+            })
+
     Path(out_sheet_path).parent.mkdir(parents=True, exist_ok=True)
     sheet.save(out_sheet_path)
-    return out_sheet_path
+    # Optional atlas JSON output
+    if out_atlas_path:
+        out_p = Path(out_atlas_path)
+        out_p.parent.mkdir(parents=True, exist_ok=True)
+        with open(out_p, "w", encoding="utf-8") as f:
+            json.dump(atlas, f, indent=2)
+    return out_sheet_path, atlas
 
 
 def create_gif(frames: List[str], out_gif_path: str, fps: int = 8) -> str:
