@@ -1,58 +1,36 @@
-# Dependencies
-node_modules/
-.pnp
-.pnp.js
-
-# Testing
-coverage/
-
-# Production
-build/
-dist/
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-.venv/
-venv/
-ENV/
-env/
-*.egg-info/
-.pytest_cache/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
+# --- OS / Editors ---
 .DS_Store
 Thumbs.db
+.vscode/
+.idea/
 
-# Environment
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-
-# Logs
+# --- Python (backend) ---
+.venv/
+__pycache__/
+*.py[cod]
 *.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-lerna-debug.log*
+*.coverage
+.pytest_cache/
+.coverage
+.mypy_cache/
 
-# Temp
-.tmp/
-tmp/
-temp/
+# --- Node / Vite (frontend) ---
+node_modules/
+apps/web/dist/
+apps/web/.vite/
+*.tsbuildinfo
 
-# Assets (optional - uncomment if needed)
-# assets/outputs/*
-# !assets/outputs/.gitkeep
+# --- Env / secrets ---
+.env
+.env.*.local
+apps/backend/.env
+apps/backend/app/.env
+apps/web/.env
+
+# --- Generated assets (our pipeline output) ---
+assets/outputs/*
+!assets/outputs/.gitkeep   # keep folder in repo, see note below
+
+# If you also write temp or job dirs, ignore them too:
+assets/tmp/
+assets/cache/

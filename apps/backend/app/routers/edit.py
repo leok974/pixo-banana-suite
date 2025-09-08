@@ -5,6 +5,9 @@ from app.services.nano_banana import apply_edit
 
 router = APIRouter()
 
+def _px(s: str) -> str:
+    return s.replace("\\", "/")
+
 class EditItemModel(BaseModel):
     image_path: str
     instruction: str
@@ -19,5 +22,7 @@ def edit(req: EditRequest):
     for item in req.items:
         normalized_path = item.image_path.replace("\\", "/")
         res = apply_edit(image_path=normalized_path, prompt=item.instruction)
+        if isinstance(res, dict) and res.get("edited_path"):
+            res["edited_path"] = _px(res["edited_path"])
         results.append(res)
     return {"items": results}

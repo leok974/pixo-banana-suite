@@ -7,6 +7,9 @@ from app.services.anim_utils import create_sprite_sheet, create_gif, normalize_f
 
 router = APIRouter()
 
+def _px(s: str) -> str:
+  return s.replace("\\", "/")
+
 
 class AnimateItemModel(BaseModel):
   # Either provide flat frames OR by_pose (preferred)
@@ -38,10 +41,10 @@ def animate(req: AnimateRequest):
 
     # Resolve by_pose map
     if item.by_pose:
-      by_pose = {k: [p.replace("\\", "/") for p in v] for k, v in item.by_pose.items()}
+      by_pose = {k: [_px(p) for p in v] for k, v in item.by_pose.items()}
     else:
       # fallback: wrap flat frames into a single "all" pose row
-      frames = [f.replace("\\", "/") for f in (item.frames or [])]
+      frames = [_px(f) for f in (item.frames or [])]
       by_pose = {"all": frames}
 
     # Normalize numbering if requested (best effort)
@@ -71,15 +74,16 @@ def animate(req: AnimateRequest):
     if gif_frames:
       create_gif(gif_frames, gif_path, fps=item.fps or 8)
 
+    # posix-ify outbound paths
     results.append({
       "basename": item.basename,
-      "sprite_sheet": sheet_path,
-      "gif": gif_path,
+      "sprite_sheet": _px(sheet_path),
+      "gif": _px(gif_path),
       "gif_pose": gif_pose,
       "frames_used": sum(len(v) for v in by_pose.values()),
       "poses": list(by_pose.keys()),
-  "atlas_path": atlas_path,
-  "atlas": atlas,
+      "atlas_path": _px(atlas_path),
+      "atlas": atlas,
     })
 
   return {"items": results}

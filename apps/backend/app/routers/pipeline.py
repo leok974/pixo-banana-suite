@@ -84,6 +84,10 @@ def _dir_times(dir_path: Path) -> Tuple[float, float]:
 def _posix(s: str) -> str:
     return s.replace("\\", "/")
 
+# Tiny helper to ensure forward slashes in all outbound paths
+def _px(s: str) -> str:
+    return s.replace("\\", "/")
+
 @router.get("/status")
 def status(
     limit: int = Query(25, ge=1, le=200),
@@ -106,12 +110,12 @@ def status(
             files = []
             for f in sub.rglob("*"):
                 if f.is_file():
-                    rel = f.as_posix()
-                    url = ("/view/" + os.path.relpath(f, base).replace("\\", "/")) if resolve_urls else None
+                    rel = _px(f.as_posix())
+                    url = ("/view/" + _px(os.path.relpath(f, base))) if resolve_urls else None
                     files.append({
                         "kind": _kind_for_path(f),
-                        "path": rel,
-                        "url": url,
+                        "path": _px(rel),
+                        "url": _px(url) if url else None,
                     })
             jobs.append({
                 "job_id": sub.name,
@@ -132,8 +136,8 @@ def status(
             "updated_at": u,
             "files": [{
                 "kind": _kind_for_path(f),
-                "path": f.as_posix(),
-                "url": ("/view/" + f.name) if resolve_urls else None,
+                "path": _px(f.as_posix()),
+                "url": _px("/view/" + f.name) if resolve_urls else None,
             } for f in root_files],
         })
 
@@ -195,6 +199,7 @@ def poses_pipeline(req: PosesPipelineRequest):
         # 1) Edit (Gemini when available, else stub)
         edit_info = {"used_model": "none", "edited_path": str(src), "reason": None}
         edited_path = str(src)
+        src_image = str(src)
         instruction_used = (req.edit_prompt or req.instruction or "").strip()
         try:
             if req.use_nano or instruction_used:
@@ -205,22 +210,21 @@ def poses_pipeline(req: PosesPipelineRequest):
                     out_dir=str(out_dir),
                     watermark_stub=bool(req.watermark_stub),
                 )
-                ep = Path(res.get("edited_path", edited_path))
-                edited_path = str(ep if ep.is_absolute() else (Path.cwd() / ep))
-                edit_info = {
-                    "used_model": res.get("used_model", "unknown"),
-                    "reason": res.get("reason"),
-                    "edited_path": str(Path(edited_path).relative_to(Path.cwd())),
-                    "instruction_used": instruction_used or None,
-                }
+                # Extra safety: normalize path directly from the service
+                if isinstance(res, dict) and res.get("edited_path"):
+                    res["edited_path"] = res["edited_path"].replace("\\", "/")
+                edit_info = res
+                src_image = edit_info["edited_path"]
         except Exception as e:
             # Fall back to original image while recording the failure in edit_info
             edit_info = {"used_model": "error", "edited_path": str(src), "reason": f"{type(e).__name__}: {e}"}
+            src_image = str(src)
 
         # 2) Poses: fan-out strictly 01-based frame names and write stub frames
         pose_frame_map: Dict[str, List[str]] = {}
-        all_frames: List[str] = []
-        im_src = Image.open(edited_path).convert("RGBA")
+        all_frames_abs: List[str] = []
+        # Use the normalized edited image path going forward
+        im_src = Image.open(src_image).convert("RGBA")
         for spec in req.poses:
             n = int(spec.frames) if (spec.frames and spec.frames > 0) else 4
             frames_for_pose: List[str] = []
@@ -230,7 +234,7 @@ def poses_pipeline(req: PosesPipelineRequest):
                 # Write a stub duplicate so downstream sheet/GIF can be created
                 im_src.save(fpath)
                 frames_for_pose.append(fpath)
-                all_frames.append(fpath)
+                all_frames_abs.append(fpath)
             pose_frame_map[spec.name] = frames_for_pose
 
         # Optionally normalize existing filenames on disk and update map
@@ -264,34 +268,33 @@ def poses_pipeline(req: PosesPipelineRequest):
         def rel(p: Path) -> str:
             return str(p.relative_to(Path.cwd()))
 
-        # Use the (possibly normalized) map to build the flat list of frames
-        flat_frames = [p for v in pose_frame_map.values() for p in v]
-        rel_frames = [rel(Path(f)) for f in flat_frames]
-        rel_sheet = rel(Path(sheet_path_str))
-        rel_atlas = rel(Path(atlas_path_str))
-        rel_gif = rel(Path(gif_path_str))
+        # Compute relative paths for output artifacts
+        sheet_path = rel(Path(sheet_path_str))
+        atlas_path = rel(Path(atlas_path_str))
+        gif_path = rel(Path(gif_path_str))
+        # Build relative by-pose map and flat relative frames
+        rel_by_pose: Dict[str, List[str]] = {k: [rel(Path(p)) for p in v] for k, v in pose_frame_map.items()}
+        all_frames = [p for p in [fp for v in rel_by_pose.values() for fp in v]]
 
         def to_url(relpath: str) -> str:
             p = Path(relpath)
             return f"/view/{p.relative_to('assets/outputs')}".replace("\\", "/")
 
-        # by-pose map with relative paths (for UI to reuse)
-        rel_by_pose: Dict[str, List[str]] = {k: [rel(Path(p)) for p in v] for k, v in pose_frame_map.items()}
-
-        # Canonicalize to forward slashes before returning
-        rel_frames = [_posix(p) for p in rel_frames]
-        rel_by_pose = {k: [_posix(p) for p in v] for k, v in rel_by_pose.items()}
-        rel_sheet = _posix(rel_sheet)
-        rel_gif = _posix(rel_gif)
-        rel_atlas = _posix(rel_atlas)
+        # posix-ify paths in response
+        def _px(s: str) -> str: return s.replace("\\", "/")
+        all_frames = [_px(p) for p in all_frames]
+        pose_frame_map = {k: [_px(p) for p in v] for k, v in rel_by_pose.items()}
+        sheet_path = _px(sheet_path); gif_path = _px(gif_path); atlas_path = _px(atlas_path)
+        if isinstance(edit_info, dict) and "edited_path" in edit_info:
+            edit_info["edited_path"] = _px(edit_info.get("edited_path", ""))
 
         payload = {
                 "job_id": f"poses-{int(time.time())}-{base}",
-                "frames": rel_frames,
-                "by_pose": rel_by_pose,
-                "sprite_sheet": rel_sheet,
-                "gif": rel_gif,
-                "atlas_path": rel_atlas,
+                "frames": all_frames,
+                "by_pose": pose_frame_map,
+                "sprite_sheet": sheet_path,
+                "gif": gif_path,
+                "atlas_path": atlas_path,
                 "atlas": atlas,
                 "gif_pose": pose_for_gif,
                 "basename": base,
@@ -302,10 +305,10 @@ def poses_pipeline(req: PosesPipelineRequest):
                     "cell_h": frame_size[1] if frame_size else None
                 },
                 "urls": {
-                    "frames": [to_url(f) for f in rel_frames],
-                    "sprite_sheet": to_url(rel_sheet),
-                    "atlas": to_url(rel_atlas),
-                    "gif": to_url(rel_gif),
+                    "frames": [to_url(f) for f in all_frames],
+                    "sprite_sheet": to_url(sheet_path),
+                    "atlas": to_url(atlas_path),
+                    "gif": to_url(gif_path),
                 }
         }
         return payload
