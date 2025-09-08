@@ -17,6 +17,16 @@ router = APIRouter(prefix="/pipeline", tags=["pipeline"])
 def ping():
     return {"status": "ok"}
 
+@router.get("/selftest")
+def selftest():
+    return {
+        "cwd": os.getcwd(),
+        "has_inputs": os.path.isdir("assets/inputs"),
+        "has_outputs": os.path.isdir("assets/outputs"),
+        "GEMINI_KEY": bool(os.getenv("GEMINI_API_KEY")),
+        "GEMINI_MODEL": os.getenv("GEMINI_MODEL"),
+    }
+
 @router.get("/roots")
 def roots():
     def check_dir(path: str) -> Dict[str, Any]:
@@ -101,14 +111,23 @@ def poses_pipeline(req: PosesPipelineRequest):
 
         base = req.basename or src.stem
 
-        # 1) Edit (safe stub)
+        # 1) Edit (Gemini when available, else stub)
+        edit_info = {"used_model": "none", "edited_path": str(src), "reason": None}
         edited_path = str(src)
         if (req.instruction or "").strip():
             nb = NanoBanana()
             item = EditItem(image_path=str(src), instruction=req.instruction.strip())
-            result = nb.run_edit_stub(item)
+            result = nb.run_edit(item)  # gemini w/ fallback
             ep = Path(result["result"]["edited_path"])
             edited_path = str(ep if ep.is_absolute() else (Path.cwd() / ep))
+            edit_info = {
+                "used_model": result.get("used_model", "unknown"),
+                "reason": result.get("reason"),
+                "edited_path": str(Path(edited_path).relative_to(Path.cwd())),
+                "instruction_used": result.get("result", {}).get("instruction_used"),
+                "path": result.get("path"),
+                "debug": result.get("debug"),  # contains failure details if stub fallback
+            }
 
         # 2) Poses
         pose_names = [p.name for p in req.poses]
@@ -129,18 +148,20 @@ def poses_pipeline(req: PosesPipelineRequest):
             p = Path(relpath)
             return f"/view/{p.relative_to('assets/outputs')}".replace("\\", "/")
 
-        return {
+        payload = {
             "job_id": f"poses-{int(time.time())}-{base}",
             "frames": rel_frames,
             "sprite_sheet": rel_sheet,
             "gif": rel_gif,
             "basename": base,
+            "edit_info": edit_info,
             "urls": {
                 "frames": [to_url(f) for f in rel_frames],
                 "sprite_sheet": to_url(rel_sheet),
                 "gif": to_url(rel_gif),
             }
         }
+        return payload
 
     except HTTPException:
         raise

@@ -59,10 +59,14 @@ export function ChatDock() {
           out_dir: "assets/outputs",
           basename: "knightA"
         })
+        const u = (r as any)?.edit_info?.used_model
+        const reason = (r as any)?.edit_info?.reason
+        const edited = (r as any)?.edit_info?.edited_path
         const lines = [
-          "Edit→Poses→Animate complete.",
-          (r as any).urls?.sprite_sheet ? `sheet: ${(r as any).urls.sprite_sheet}` : "",
-          (r as any).urls?.gif ? `gif: ${(r as any).urls.gif}` : "",
+          `Edit → Poses → Animate complete. (edit=${u || "?"}${reason ? `, reason=${reason}` : ""})`,
+          edited ? `edited: ${edited}` : "",
+          (r as any)?.urls?.sprite_sheet ? `sheet: ${(r as any).urls.sprite_sheet}` : "",
+          (r as any)?.urls?.gif ? `gif: ${(r as any).urls.gif}` : "",
         ].filter(Boolean)
         return lines.join("\n")
       }
@@ -109,18 +113,53 @@ export function ChatDock() {
     },
   ]), [])
 
+  // crude NL router: if the text mentions "pose"/"poses" it will call /pipeline/poses.
+  // It tries to extract an image path like "from assets/inputs/1.png" or "from 1.png".
   async function sendUser(text: string) {
     if (!text.trim()) return
     setMessages(m => [...m, { role: "user", content: text, ts: Date.now() }])
     setInput("")
     setSending(true)
     try {
-      const resp = await agentChat({
-        messages: [{ role: "user", content: text }],
-        intent: "auto"
-      })
-      const reply = resp?.reply ?? "(no reply)"
-      setMessages(m => [...m, { role: "assistant", content: reply, ts: Date.now() }])
+      const lower = text.toLowerCase()
+      const mentionsPoses = /\bpose(s)?\b/.test(lower) || /\bmake\s+poses\b/.test(lower)
+
+      if (mentionsPoses) {
+        // very light Parse: image path after "from"
+        const imgMatch = text.match(/from\s+([^\s'\"]+)/i)
+        const image_path = imgMatch ? imgMatch[1] : "assets/inputs/1.png"
+
+        // pull pose words if user names them, else default three
+        const names: string[] = []
+        const pushIf = (name: string) => { if (lower.includes(name)) names.push(name) }
+        pushIf("idle"); pushIf("attack"); pushIf("spell"); pushIf("walk"); pushIf("run");
+        const poses = (names.length ? names : ["idle","attack","spell"]).map(n => ({ name: n }))
+
+        // use the whole text as the edit instruction (natural prompt)
+        const instruction = text
+        const payload = { image_path, instruction, poses, fps: 8, sheet_cols: 3, basename: undefined as any }
+
+        const r = await postPoses(payload)
+        const u = (r as any)?.edit_info?.used_model
+        const reason = (r as any)?.edit_info?.reason
+        const edited = (r as any)?.edit_info?.edited_path
+        const lines = [
+          `Edit → Poses → Animate complete. (edit=${u || "?"}${reason ? `, reason=${reason}` : ""})`,
+          edited ? `edited: ${edited}` : "",
+          (r as any)?.urls?.sprite_sheet ? `sheet: ${(r as any).urls.sprite_sheet}` : "",
+          (r as any)?.urls?.gif ? `gif: ${(r as any).urls.gif}` : ""
+        ].filter(Boolean)
+        const reply = lines.join("\n") || "(done)"
+        setMessages(m => [...m, { role: "assistant", content: reply, ts: Date.now() }])
+      } else {
+        // fall back to normal agent chat
+        const resp = await agentChat({
+          messages: [{ role: "user", content: text }],
+          intent: "auto"
+        })
+        const reply = resp?.reply ?? "(no reply)"
+        setMessages(m => [...m, { role: "assistant", content: reply, ts: Date.now() }])
+      }
     } catch (e: any) {
       setMessages(m => [...m, { role: "assistant", content: String(e?.message ?? e), ts: Date.now() }])
     } finally {
