@@ -8,7 +8,7 @@ import time
 import os
 import traceback
 
-from app.services.nano_banana import NanoBanana, EditItem
+from app.services.nano_banana import apply_edit
 from app.services.pose_maker import make_local_pose_frames
 from app.services.anim_utils import (
     create_sprite_sheet,
@@ -150,6 +150,11 @@ class PoseSpec(BaseModel):
 class PosesPipelineRequest(BaseModel):
     image_path: str                 # original image to edit
     instruction: Optional[str] = "" # nano banana edit instruction (optional)
+    # nano edit options / aliases
+    edit_prompt: Optional[str] = None  # alias of instruction
+    use_nano: Optional[bool] = True    # run nano banana by default (stub if no key)
+    model: Optional[str] = None        # optional model override (unused in current NanoBanana)
+    watermark_stub: Optional[bool] = True  # reserved; stub always watermarks currently
     poses: List[PoseSpec]           # list of pose names (idle, attack, spell…)
     fps: Optional[int] = 8
     sheet_cols: Optional[int] = 3
@@ -190,20 +195,27 @@ def poses_pipeline(req: PosesPipelineRequest):
         # 1) Edit (Gemini when available, else stub)
         edit_info = {"used_model": "none", "edited_path": str(src), "reason": None}
         edited_path = str(src)
-        if (req.instruction or "").strip():
-            nb = NanoBanana()
-            item = EditItem(image_path=str(src), instruction=req.instruction.strip())
-            result = nb.run_edit(item)  # gemini w/ fallback
-            ep = Path(result["result"]["edited_path"])
-            edited_path = str(ep if ep.is_absolute() else (Path.cwd() / ep))
-            edit_info = {
-                "used_model": result.get("used_model", "unknown"),
-                "reason": result.get("reason"),
-                "edited_path": str(Path(edited_path).relative_to(Path.cwd())),
-                "instruction_used": result.get("result", {}).get("instruction_used"),
-                "path": result.get("path"),
-                "debug": result.get("debug"),  # contains failure details if stub fallback
-            }
+        instruction_used = (req.edit_prompt or req.instruction or "").strip()
+        try:
+            if req.use_nano or instruction_used:
+                res = apply_edit(
+                    image_path=str(src),
+                    prompt=instruction_used,
+                    model=req.model,
+                    out_dir=str(out_dir),
+                    watermark_stub=bool(req.watermark_stub),
+                )
+                ep = Path(res.get("edited_path", edited_path))
+                edited_path = str(ep if ep.is_absolute() else (Path.cwd() / ep))
+                edit_info = {
+                    "used_model": res.get("used_model", "unknown"),
+                    "reason": res.get("reason"),
+                    "edited_path": str(Path(edited_path).relative_to(Path.cwd())),
+                    "instruction_used": instruction_used or None,
+                }
+        except Exception as e:
+            # Fall back to original image while recording the failure in edit_info
+            edit_info = {"used_model": "error", "edited_path": str(src), "reason": f"{type(e).__name__}: {e}"}
 
         # 2) Poses: fan-out strictly 01-based frame names and write stub frames
         pose_frame_map: Dict[str, List[str]] = {}

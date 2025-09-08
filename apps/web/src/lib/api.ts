@@ -141,6 +141,10 @@ export async function postPoses(body: {
   cell_h?: number
   pose_for_gif?: string
   normalize_existing?: boolean
+  use_nano?: boolean
+  edit_prompt?: string
+  model?: string
+  watermark_stub?: boolean
 }): Promise<any> {
   return request('/pipeline/poses', {
     method: 'POST',

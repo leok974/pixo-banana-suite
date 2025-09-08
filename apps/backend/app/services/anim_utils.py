@@ -262,6 +262,60 @@ def create_gif(frames: List[str], out_gif_path: str, fps: int = 8) -> str:
     return out_gif_path
 
 
+def materialize_frames_from_source(
+    src_image_path: str,
+    by_pose: Dict[str, List[str]],
+    cell_w: Optional[int] = None,
+    cell_h: Optional[int] = None,
+    fit: str = "contain",  # "contain" | "cover"
+) -> None:
+    """
+    Write actual frame files for each target path in by_pose using a single source image.
+    If cell_w/h provided, resize to fit within (cell_w, cell_h) preserving aspect, centered on transparent BG.
+    Otherwise, write the source image as-is to each path.
+    """
+    if not by_pose:
+        return
+    src_im = _load_rgba(src_image_path)
+
+    def _fit(im: Image.Image, w: int, h: int, mode: str = "contain") -> Image.Image:
+        if w <= 0 or h <= 0:
+            return im
+        # preserve aspect; choose scale based on mode
+        sw = w / max(1, im.width)
+        sh = h / max(1, im.height)
+        if (mode or "contain").lower() == "cover":
+            scale = max(sw, sh)
+        else:
+            scale = min(sw, sh)
+        new_w = max(1, int(im.width * scale))
+        new_h = max(1, int(im.height * scale))
+        im2 = im
+        if new_w != im.width or new_h != im.height:
+            im2 = im.resize((new_w, new_h), Image.NEAREST)
+        canvas = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        # center; negative offsets crop overflow for cover case
+        ox = (w - im2.width) // 2
+        oy = (h - im2.height) // 2
+        canvas.paste(im2, (ox, oy))
+        return canvas
+
+    # Iterate all target paths
+    for pose, paths in by_pose.items():
+        for tgt in paths:
+            try:
+                out_p = Path(tgt)
+                out_p.parent.mkdir(parents=True, exist_ok=True)
+                if cell_w and cell_h:
+                    out_im = _fit(src_im, int(cell_w), int(cell_h), fit)
+                else:
+                    out_im = src_im
+                out_im.save(out_p.as_posix())
+            except Exception:
+                # best-effort materialization; skip failures
+                pass
+
+
 # ---- Compatibility wrapper (flat list -> grouped by inferred pose name) ----
 def _group_frames_by_pose(frame_paths: List[str], basename: str) -> Dict[str, List[str]]:
     """

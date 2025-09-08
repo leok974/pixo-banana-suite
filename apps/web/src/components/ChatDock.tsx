@@ -44,6 +44,8 @@ export function ChatDock() {
   const [zipSheet,  setZipSheet]  = useState(true)
   const [zipGif,    setZipGif]    = useState(true)
   const [zipAtlas,  setZipAtlas]  = useState(true)
+  const [useNano, setUseNano] = useState(true)
+  const [editPrompt, setEditPrompt] = useState('')
 
   // Pose selection state
   const POSE_LIST = [
@@ -134,6 +136,9 @@ export function ChatDock() {
           fixed_cell: isFixed,
           cell_w: isFixed ? cellW : undefined,
           cell_h: isFixed ? cellH : undefined,
+          use_nano: useNano,
+          edit_prompt: editPrompt || undefined,
+          watermark_stub: true,
         })
         setPreview({ sheet: (r as any)?.urls?.sprite_sheet, gif: (r as any)?.urls?.gif })
         if ((r as any)?.by_pose) {
@@ -256,7 +261,7 @@ export function ChatDock() {
         return "Animate → " + JSON.stringify(r)
       }
     },
-  ]), [preset, cellW, cellH, poseSel, sending])
+  ]), [preset, cellW, cellH, poseSel, sending, useNano, editPrompt])
 
   // crude NL router: if the text mentions "pose"/"poses" it will call /pipeline/poses.
   // It tries to extract an image path like "from assets/inputs/1.png" or "from 1.png".
@@ -287,6 +292,9 @@ export function ChatDock() {
           fixed_cell: isFixed,
           cell_w: isFixed ? cellW : undefined,
           cell_h: isFixed ? cellH : undefined,
+          use_nano: useNano,
+          edit_prompt: editPrompt || undefined,
+          watermark_stub: true,
         }
 
         const r = await postPoses(payload)
@@ -484,6 +492,27 @@ export function ChatDock() {
                 Auto: infer compact cells from the first frame. Fixed: lock exact pixel size (nearest-neighbor).
               </div>
             </div>
+
+            {/* Nano Banana controls */}
+            <fieldset className="rounded-xl border border-zinc-800 p-3">
+              <legend className="px-1 text-xs text-zinc-400">Nano Banana</legend>
+              <label className="flex items-center gap-2 mb-2">
+                <input
+                  type="checkbox"
+                  className="accent-zinc-200"
+                  checked={useNano}
+                  onChange={e => setUseNano(e.target.checked)}
+                />
+                <span className="text-sm">Use Nano Banana (Gemini) before poses</span>
+              </label>
+              <textarea
+                className="w-full bg-zinc-800 border border-zinc-700 rounded p-2 text-sm"
+                rows={2}
+                placeholder="Edit prompt (e.g., 'make armor blue, add cape')"
+                value={editPrompt}
+                onChange={e => setEditPrompt(e.target.value)}
+              />
+            </fieldset>
 
             {/* Pose picker */}
             <div className="rounded-lg border border-zinc-800 p-3 bg-zinc-950/50 space-y-2">
