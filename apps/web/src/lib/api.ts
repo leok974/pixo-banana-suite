@@ -118,23 +118,20 @@ export function postAnimate(body: {
   })
 }
 
-export async function postPoses(payload: {
+export async function postPoses(body: {
   image_path: string
-  instruction?: string
-  poses: { name: string }[]
+  poses: { name: string; frames?: number }[]
   fps?: number
   sheet_cols?: number
-  out_dir?: string
-  basename?: string
-}) {
-  const base = getAPIBase()
-  const res = await fetch(`${base}/pipeline/poses`, {
+  fixed_cell?: boolean
+  cell_w?: number
+  cell_h?: number
+}): Promise<any> {
+  return request('/pipeline/poses', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(body),
   })
-  if (!res.ok) throw new Error(`/pipeline/poses ${res.status}`)
-  return res.json()
 }
 
 export async function agentChat(payload: {

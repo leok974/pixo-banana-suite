@@ -22,11 +22,68 @@ export function ChatDock() {
   const [input, setInput] = useState("")
   const [messages, setMessages] = useState<Msg[]>([])
   const [sending, setSending] = useState(false)
+  const [fixedCell, setFixedCell] = useState(false)
+  const [cellW, setCellW] = useState(128)
+  const [cellH, setCellH] = useState(128)
+  const [preset, setPreset] = useState<"auto"|"64"|"96"|"128"|"256"|"custom">("auto")
+  const [preview, setPreview] = useState<{sheet?: string; gif?: string} | null>(null)
+
+  // Pose selection state
+  const POSE_LIST = [
+    "idle","walk","run","attack","spell","hurt","die","jump","cast","defend"
+  ] as const
+  type PoseName = typeof POSE_LIST[number]
+  const BASIC_POSES: PoseName[] = ["idle","walk","attack","spell"]
+  const [poseSel, setPoseSel] = useState<Record<PoseName, boolean>>(
+    Object.fromEntries(POSE_LIST.map(p => [p, BASIC_POSES.includes(p)])) as Record<PoseName, boolean>
+  )
+  // Default frame counts per pose
+  const DEFAULT_FRAMES: Record<PoseName, number> = {
+    idle: 4,
+    walk: 8,
+    run: 8,
+    attack: 6,
+    spell: 6,
+    hurt: 4,
+    die: 6,
+    jump: 6,
+    cast: 6,
+    defend: 4,
+  }
+  const [poseFrames, setPoseFrames] = useState<Record<PoseName, number>>(
+    Object.fromEntries(POSE_LIST.map(p => [p, DEFAULT_FRAMES[p]])) as Record<PoseName, number>
+  )
+  function setAllPoses(v: boolean) {
+    setPoseSel(Object.fromEntries(POSE_LIST.map(p => [p, v])) as Record<PoseName, boolean>)
+  }
+  function setBasicPoses() {
+    setPoseSel(Object.fromEntries(POSE_LIST.map(p => [p, BASIC_POSES.includes(p)])) as Record<PoseName, boolean>)
+  }
+  function selectedPoses(): {name: string; frames?: number}[] {
+    return (POSE_LIST as readonly PoseName[])
+      .filter(p => poseSel[p])
+      .map(p => {
+        const f = poseFrames[p]
+        return f && f > 0 ? { name: p, frames: f } : { name: p }
+      })
+  }
 
   const listRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight })
   }, [messages, sending])
+
+  // helper: sync preset → fields
+  function applyPreset(p: typeof preset) {
+    setPreset(p)
+    if (p === "auto") { setFixedCell(false); return }
+    setFixedCell(true)
+    const size = p === "custom" ? null : Number(p)
+    if (size) { setCellW(size); setCellH(size) }
+  }
+
+  // Derived: fixed mode when preset not auto (or legacy fixedCell state)
+  const isFixed = preset !== "auto" || fixedCell
 
   // Tool actions (now *in* the chat)
   const actions = useMemo(() => ([
@@ -52,18 +109,26 @@ export function ChatDock() {
       run: async () => {
         const r = await postPoses({
           image_path: "assets/inputs/1.png", // <-- your generated image here
-          instruction: "keep the armor silhouette; tint cloak blue; add faint glow",
-          poses: [{ name: "idle" }, { name: "attack" }, { name: "spell" }],
+          poses: selectedPoses(),
           fps: 8,
           sheet_cols: 3,
-          out_dir: "assets/outputs",
-          basename: "knightA"
+          fixed_cell: isFixed,
+          cell_w: isFixed ? cellW : undefined,
+          cell_h: isFixed ? cellH : undefined,
         })
+        setPreview({ sheet: (r as any)?.urls?.sprite_sheet, gif: (r as any)?.urls?.gif })
         const u = (r as any)?.edit_info?.used_model
         const reason = (r as any)?.edit_info?.reason
         const edited = (r as any)?.edit_info?.edited_path
+        const so = (r as any)?.sheet_options
+        const chosenPoses = ((r as any)?.frames ?? [])
+          .map((s: string) => (s as string).match(/_(\w+)_\d+\.png$/i)?.[1])
+          .filter(Boolean)
+          .slice(0, 5)
         const lines = [
           `Edit → Poses → Animate complete. (edit=${u || "?"}${reason ? `, reason=${reason}` : ""})`,
+          so?.fixed_cell ? `cell: ${so.cell_w}×${so.cell_h}` : `cell: auto`,
+          chosenPoses.length ? `poses: ${Array.from(new Set(chosenPoses as string[])).join(", ")}` : "",
           edited ? `edited: ${edited}` : "",
           (r as any)?.urls?.sprite_sheet ? `sheet: ${(r as any).urls.sprite_sheet}` : "",
           (r as any)?.urls?.gif ? `gif: ${(r as any).urls.gif}` : "",
@@ -111,7 +176,7 @@ export function ChatDock() {
         return "Animate → " + JSON.stringify(r)
       }
     },
-  ]), [])
+  ]), [preset, cellW, cellH, poseSel])
 
   // crude NL router: if the text mentions "pose"/"poses" it will call /pipeline/poses.
   // It tries to extract an image path like "from assets/inputs/1.png" or "from 1.png".
@@ -124,27 +189,40 @@ export function ChatDock() {
       const lower = text.toLowerCase()
       const mentionsPoses = /\bpose(s)?\b/.test(lower) || /\bmake\s+poses\b/.test(lower)
 
-      if (mentionsPoses) {
+  if (mentionsPoses) {
         // very light Parse: image path after "from"
         const imgMatch = text.match(/from\s+([^\s'\"]+)/i)
         const image_path = imgMatch ? imgMatch[1] : "assets/inputs/1.png"
 
         // pull pose words if user names them, else default three
-        const names: string[] = []
-        const pushIf = (name: string) => { if (lower.includes(name)) names.push(name) }
-        pushIf("idle"); pushIf("attack"); pushIf("spell"); pushIf("walk"); pushIf("run");
-        const poses = (names.length ? names : ["idle","attack","spell"]).map(n => ({ name: n }))
+  // Use the UI selection; if empty, ensure at least idle
+  const poses = selectedPoses()
+  if (poses.length === 0) poses.push({ name: "idle" })
 
-        // use the whole text as the edit instruction (natural prompt)
-        const instruction = text
-        const payload = { image_path, instruction, poses, fps: 8, sheet_cols: 3, basename: undefined as any }
+        const payload = {
+          image_path,
+          poses,
+          fps: 8,
+          sheet_cols: 3,
+          fixed_cell: isFixed,
+          cell_w: isFixed ? cellW : undefined,
+          cell_h: isFixed ? cellH : undefined,
+        }
 
         const r = await postPoses(payload)
+        setPreview({ sheet: (r as any)?.urls?.sprite_sheet, gif: (r as any)?.urls?.gif })
         const u = (r as any)?.edit_info?.used_model
         const reason = (r as any)?.edit_info?.reason
         const edited = (r as any)?.edit_info?.edited_path
+        const so = (r as any)?.sheet_options
+        const chosenPoses = ((r as any)?.frames ?? [])
+          .map((s: string) => (s as string).match(/_(\w+)_\d+\.png$/i)?.[1])
+          .filter(Boolean)
+          .slice(0, 5)
         const lines = [
           `Edit → Poses → Animate complete. (edit=${u || "?"}${reason ? `, reason=${reason}` : ""})`,
+          so?.fixed_cell ? `cell: ${so.cell_w}×${so.cell_h}` : `cell: auto`,
+          chosenPoses.length ? `poses: ${Array.from(new Set(chosenPoses as string[])).join(", ")}` : "",
           edited ? `edited: ${edited}` : "",
           (r as any)?.urls?.sprite_sheet ? `sheet: ${(r as any).urls.sprite_sheet}` : "",
           (r as any)?.urls?.gif ? `gif: ${(r as any).urls.gif}` : ""
@@ -205,6 +283,103 @@ export function ChatDock() {
               ))}
             </div>
 
+            {/* Sprite sheet options */}
+            <div className="rounded-lg border border-zinc-800 p-3 bg-zinc-950/50 space-y-2">
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="text-sm">Sprite cell size</label>
+                <select
+                  className="rounded bg-zinc-800 border border-zinc-700 px-2 py-1 text-sm"
+                  value={preset}
+                  onChange={(e) => applyPreset(e.target.value as any)}
+                >
+                  <option value="auto">Auto (infer)</option>
+                  <option value="64">64 × 64</option>
+                  <option value="96">96 × 96</option>
+                  <option value="128">128 × 128</option>
+                  <option value="256">256 × 256</option>
+                  <option value="custom">Custom…</option>
+                </select>
+
+                <div className="flex items-center gap-2 text-sm">
+                  <label>W</label>
+                  <input
+                    type="number" min={8}
+                    className="w-20 rounded bg-zinc-800 border border-zinc-700 px-2 py-1"
+                    value={cellW}
+                    onChange={(e) => setCellW(parseInt(e.target.value || "0", 10))}
+                    disabled={preset !== "custom"}
+                  />
+                  <label>H</label>
+                  <input
+                    type="number" min={8}
+                    className="w-20 rounded bg-zinc-800 border border-zinc-700 px-2 py-1"
+                    value={cellH}
+                    onChange={(e) => setCellH(parseInt(e.target.value || "0", 10))}
+                    disabled={preset !== "custom"}
+                  />
+                </div>
+              </div>
+
+              <div className="text-xs text-zinc-500">
+                Auto: infer compact cells from the first frame. Fixed: lock exact pixel size (nearest-neighbor).
+              </div>
+            </div>
+
+            {/* Pose picker */}
+            <div className="rounded-lg border border-zinc-800 p-3 bg-zinc-950/50 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-medium">Poses</div>
+                <div className="flex gap-2">
+                  <button
+                    className="text-xs underline text-zinc-300 hover:text-zinc-100"
+                    onClick={() => setAllPoses(true)}
+                  >All</button>
+                  <button
+                    className="text-xs underline text-zinc-300 hover:text-zinc-100"
+                    onClick={() => setAllPoses(false)}
+                  >None</button>
+                  <button
+                    className="text-xs underline text-zinc-300 hover:text-zinc-100"
+                    onClick={setBasicPoses}
+                  >Basic</button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {POSE_LIST.map(p => (
+                  <label key={p} className="flex items-center justify-between gap-2 text-sm rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-1">
+                    <span className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={poseSel[p]}
+                        onChange={(e) => setPoseSel(prev => ({ ...prev, [p]: e.target.checked }))}
+                      />
+                      <span className="capitalize">{p}</span>
+                    </span>
+                    {poseSel[p] && (
+                      <span className="flex items-center gap-2 text-[11px] opacity-90">
+                        frames
+                        <input
+                          type="number"
+                          min={1}
+                          value={poseFrames[p]}
+                          onChange={(e) => {
+                            const v = parseInt(e.target.value || '1', 10)
+                            setPoseFrames(prev => ({ ...prev, [p]: Number.isFinite(v) && v > 0 ? v : 1 }))
+                          }}
+                          className="w-16 rounded bg-zinc-900 border border-zinc-700 px-2 py-1"
+                        />
+                      </span>
+                    )}
+                  </label>
+                ))}
+              </div>
+
+              <div className="text-[11px] text-zinc-500">
+                These poses will be used by “Make Poses” and by natural text commands that trigger posing.
+              </div>
+            </div>
+
             {/* Message list */}
             <div ref={listRef} className="h-52 overflow-auto rounded-lg border border-zinc-800 bg-zinc-950/50 p-2">
               {messages.map((m, i) => (
@@ -218,6 +393,26 @@ export function ChatDock() {
                 <div className="text-xs text-zinc-500">Type a message or try a tool above.</div>
               )}
             </div>
+
+            {/* Preview panel */}
+            {preview && (preview.sheet || preview.gif) && (
+              <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-2 space-y-2">
+                <div className="text-xs text-zinc-400">Preview</div>
+                {preview.sheet && (
+                  <a href={preview.sheet} target="_blank" rel="noreferrer" className="block">
+                    <img src={preview.sheet} alt="sprite-sheet" className="max-h-48 w-auto rounded border border-zinc-800" />
+                  </a>
+                )}
+                {preview.gif && (
+                  <a href={preview.gif} target="_blank" rel="noreferrer" className="inline-block">
+                    <img src={preview.gif} alt="gif" className="h-20 w-auto rounded border border-zinc-800" />
+                  </a>
+                )}
+                <div className="text-[10px] text-zinc-500">
+                  Click to open full size. (Served from <code>/view</code>)
+                </div>
+              </div>
+            )}
 
             {/* Composer */}
             <div className="flex gap-2">
