@@ -167,6 +167,12 @@ class PosesPipelineRequest(BaseModel):
 @router.post("/poses")
 def poses_pipeline(req: PosesPipelineRequest):
     try:
+        # Safety belt: default to single idle when none provided
+        if not req.poses or len(req.poses) == 0:
+            req.poses = [PoseSpec(name="idle")]
+        # Validate: frames must be >= 1 when provided
+        if any((spec.frames is not None and int(spec.frames) < 1) for spec in req.poses):
+            raise HTTPException(status_code=400, detail="Invalid frames; must be >= 1 when provided.")
         # Normalize/resolve
         src = Path(req.image_path.replace("\\", "/"))
         if not src.is_absolute():

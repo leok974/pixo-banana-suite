@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { pingAPI, fetchRoots, postPoses, postEdit, postAnimate } from "../lib/api"
 import AtlasViewer from './AtlasViewer'
+import PosePlayer from './PosePlayer'
 import type { AtlasMeta } from '@/lib/api'
 import { agentChat } from "../lib/api"
 
@@ -20,6 +21,8 @@ function DotThinking() {
 }
 
 export function ChatDock() {
+  const API_BASE = (document.querySelector('meta[name="api-base"]') as HTMLMetaElement)?.content || ''
+  const [wideMode, setWideMode] = useState(true)
   const [open, setOpen] = useState(true)
   const [input, setInput] = useState("")
   const [messages, setMessages] = useState<Msg[]>([])
@@ -41,8 +44,9 @@ export function ChatDock() {
   ] as const
   type PoseName = typeof POSE_LIST[number]
   const BASIC_POSES: PoseName[] = ["idle","walk","attack","spell"]
+  // Default only 'idle' selected per request
   const [poseSel, setPoseSel] = useState<Record<PoseName, boolean>>(
-    Object.fromEntries(POSE_LIST.map(p => [p, BASIC_POSES.includes(p)])) as Record<PoseName, boolean>
+    Object.fromEntries(POSE_LIST.map(p => [p, p === 'idle'])) as Record<PoseName, boolean>
   )
   // Default frame counts per pose
   const DEFAULT_FRAMES: Record<PoseName, number> = {
@@ -60,6 +64,7 @@ export function ChatDock() {
   const [poseFrames, setPoseFrames] = useState<Record<PoseName, number>>(
     Object.fromEntries(POSE_LIST.map(p => [p, DEFAULT_FRAMES[p]])) as Record<PoseName, number>
   )
+  const selectedCount = (POSE_LIST as readonly PoseName[]).reduce((acc, p) => acc + (poseSel[p] ? 1 : 0), 0)
   function setAllPoses(v: boolean) {
     setPoseSel(Object.fromEntries(POSE_LIST.map(p => [p, v])) as Record<PoseName, boolean>)
   }
@@ -110,7 +115,7 @@ export function ChatDock() {
         return "Roots → " + JSON.stringify(r)
       }
     },
-    {
+  {
       key: "poses",
       label: "Make Poses",
       run: async () => {
@@ -132,8 +137,18 @@ export function ChatDock() {
           setPoseFilter(first || null)
         }
         if ((r as any)?.atlas) setLastAtlas((r as any).atlas as AtlasMeta)
-        if ((r as any)?.urls?.sprite_sheet) setLastSheetUrl((r as any).urls.sprite_sheet as string)
-        else if ((r as any)?.sprite_sheet) setLastSheetUrl((r as any).sprite_sheet as string)
+        // Build reliable sheet URL (absolute when API_BASE exists)
+        if ((r as any)?.urls?.sprite_sheet) {
+          const raw = (r as any).urls.sprite_sheet as string
+          const url = raw.startsWith('/view')
+            ? (API_BASE ? new URL(raw, API_BASE).toString() : raw)
+            : raw
+          setLastSheetUrl(url)
+        } else if ((r as any)?.sprite_sheet) {
+          const rel = ((r as any).sprite_sheet as string).replace(/^assets\/outputs\//, '')
+          const url = API_BASE ? new URL(`/view/${rel}`, API_BASE).toString() : `/view/${rel}`
+          setLastSheetUrl(url)
+        }
         const u = (r as any)?.edit_info?.used_model
         const reason = (r as any)?.edit_info?.reason
         const edited = (r as any)?.edit_info?.edited_path
@@ -196,9 +211,17 @@ export function ChatDock() {
         const r = await postAnimate(payload as any)
         const item = (r as any)?.items?.[0]
         if (item?.atlas) setLastAtlas(item.atlas as AtlasMeta)
-        if (item?.sprite_sheet) {
-          const ss: string = item.sprite_sheet
-          setLastSheetUrl(ss.startsWith('/view') ? ss : `/view/${ss.split('assets/outputs/').pop()}`)
+        // Build reliable sheet URL after /animate
+        if (item?.urls?.sprite_sheet) {
+          const raw: string = item.urls.sprite_sheet
+          const url = raw.startsWith('/view')
+            ? (API_BASE ? new URL(raw, API_BASE).toString() : raw)
+            : raw
+          setLastSheetUrl(url)
+        } else if (item?.sprite_sheet) {
+          const rel = (item.sprite_sheet as string).replace(/^assets\/outputs\//, '')
+          const url = API_BASE ? new URL(`/view/${rel}`, API_BASE).toString() : `/view/${rel}`
+          setLastSheetUrl(url)
         }
         if (item?.gif || item?.sprite_sheet) {
           return [
@@ -210,7 +233,7 @@ export function ChatDock() {
         return "Animate → " + JSON.stringify(r)
       }
     },
-  ]), [preset, cellW, cellH, poseSel])
+  ]), [preset, cellW, cellH, poseSel, sending])
 
   // crude NL router: if the text mentions "pose"/"poses" it will call /pipeline/poses.
   // It tries to extract an image path like "from assets/inputs/1.png" or "from 1.png".
@@ -221,7 +244,7 @@ export function ChatDock() {
     setSending(true)
     try {
       const lower = text.toLowerCase()
-      const mentionsPoses = /\bpose(s)?\b/.test(lower) || /\bmake\s+poses\b/.test(lower)
+  const mentionsPoses = /\bpose(s)?\b/.test(lower) || /\bmake\s+poses\b/.test(lower)
 
   if (mentionsPoses) {
         // very light Parse: image path after "from"
@@ -250,6 +273,19 @@ export function ChatDock() {
           setLastByPose(bp)
           const first = Object.keys(bp)[0]
           setGifPose(first || null)
+        }
+        if ((r as any)?.atlas) setLastAtlas((r as any).atlas as AtlasMeta)
+        // Build reliable sheet URL in NL flow too
+        if ((r as any)?.urls?.sprite_sheet) {
+          const raw = (r as any).urls.sprite_sheet as string
+          const url = raw.startsWith('/view')
+            ? (API_BASE ? new URL(raw, API_BASE).toString() : raw)
+            : raw
+          setLastSheetUrl(url)
+        } else if ((r as any)?.sprite_sheet) {
+          const rel = ((r as any).sprite_sheet as string).replace(/^assets\/outputs\//, '')
+          const url = API_BASE ? new URL(`/view/${rel}`, API_BASE).toString() : `/view/${rel}`
+          setLastSheetUrl(url)
         }
         const u = (r as any)?.edit_info?.used_model
         const reason = (r as any)?.edit_info?.reason
@@ -299,15 +335,32 @@ export function ChatDock() {
   }
 
   return (
-    <div className="fixed bottom-4 right-4 w-[380px] max-w-[95vw]">
-      <div className="rounded-2xl border border-zinc-800 bg-zinc-900 shadow-lg">
-        <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-800">
+    <div className={wideMode
+      ? "fixed inset-0 z-40 bg-zinc-950/95 backdrop-blur supports-[backdrop-filter]:bg-zinc-950/70"
+      : "fixed bottom-4 right-4 z-[70] w-[480px] md:w-[560px] max-h-[80vh] overflow-hidden"
+    }>
+      <div className={wideMode ? "h-full w-full max-w-screen-2xl mx-auto p-4 overflow-auto" : "h-full"}>
+        {/* header */}
+        <div className="flex items-center gap-2 mb-2 sticky top-4">
+          <button
+            className="px-3 py-1.5 rounded-lg border border-zinc-700 hover:bg-zinc-800"
+            onClick={()=> setWideMode(!wideMode)}
+            title={wideMode ? "Switch to docked" : "Switch to wide"}
+          >
+            {wideMode ? "Dock" : "Wide"}
+          </button>
           <div className="text-sm font-medium">Agent</div>
-          <button className="text-xs text-zinc-400 underline" onClick={() => setOpen(!open)}>
+          <button
+            className="sticky top-4 right-4 ml-auto block px-3 py-1.5 rounded-lg border border-zinc-700 hover:bg-zinc-800"
+            onClick={() => setOpen(o => !o)}
+          >
             {open ? "Collapse" : "Expand"}
           </button>
         </div>
-
+        <div className={wideMode
+          ? "rounded-2xl border border-zinc-800 bg-zinc-900/90 shadow-lg min-h-[60vh]"
+          : "rounded-2xl border border-zinc-800 bg-zinc-900 shadow-lg max-h-[70vh] overflow-y-auto"
+        }>
         {open && (
           <div className="p-3 space-y-3">
             {/* Quick tools row (moved into chat) */}
@@ -316,12 +369,17 @@ export function ChatDock() {
                 <button
                   key={a.key}
                   onClick={() => runAction(a.run, a.label)}
-                  className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-left text-xs hover:bg-zinc-700"
+                  className="rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-left text-xs hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={(a.key === 'poses' && (selectedCount === 0 || sending))}
+                  title={a.key === 'poses' && selectedCount === 0 ? 'Pick at least one pose.' : undefined}
                 >
                   {a.label}
                 </button>
               ))}
             </div>
+            {selectedCount === 0 && (
+              <div className="text-amber-400 text-sm">Pick at least one pose.</div>
+            )}
 
             {/* Sprite sheet options */}
             <div className="rounded-lg border border-zinc-800 p-3 bg-zinc-950/50 space-y-2">
@@ -505,12 +563,41 @@ export function ChatDock() {
               </div>
             )}
 
+            {/* Tiny play/stop scrubber for the selected pose */}
+            {lastAtlas && lastSheetUrl && (poseFilter || gifPose) && (
+              <div className="mt-3">
+                <PosePlayer atlas={lastAtlas} sheetUrl={lastSheetUrl} pose={(poseFilter || gifPose)!} fps={8} scalePx={2} />
+              </div>
+            )}
+
             {/* Atlas viewer */}
             {lastAtlas && lastSheetUrl && (
               <div className="mt-3">
                 <AtlasViewer sheetUrl={lastSheetUrl} atlas={lastAtlas} poseFilter={poseFilter} />
               </div>
             )}
+
+            {/* Always show a bottom Preview panel */}
+            <div className="mt-3">
+              <div className="text-sm opacity-80 mb-1">Preview</div>
+              <div className="rounded-xl border border-zinc-700 bg-zinc-900 p-2">
+                {lastSheetUrl && (
+                  <a href={lastSheetUrl} target="_blank" rel="noreferrer" className="block text-xs opacity-70 mb-2">
+                    Click to open full size
+                  </a>
+                )}
+                {lastSheetUrl ? (
+                  <img
+                    src={lastSheetUrl}
+                    alt="sprite sheet"
+                    className="w-full max-w-full rounded-lg border border-zinc-800 mt-2 object-contain max-h-[360px]"
+                    draggable={false}
+                  />
+                ) : (
+                  <div className="text-sm opacity-60">No preview yet.</div>
+                )}
+              </div>
+            </div>
 
             {/* Composer */}
             <div className="flex gap-2">
@@ -536,6 +623,7 @@ export function ChatDock() {
             </div>
           </div>
         )}
+        </div>
       </div>
     </div>
   )
