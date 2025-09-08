@@ -1,15 +1,16 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AtlasMeta } from '@/lib/api'
 
 type Props = {
   atlas: AtlasMeta
   sheetUrl: string
-  pose: string
-  fps?: number
-  scalePx?: number
+  pose: string            // e.g., "walk"
+  fps?: number            // default 8
+  scalePx?: number        // initial zoom (cell scale), default 2
 }
 
 export default function PosePlayer({ atlas, sheetUrl, pose, fps = 8, scalePx = 2 }: Props) {
+  // frames for the pose, sorted by index (1..N)
   const frames = useMemo(() => {
     const arr = (atlas?.frames || []).filter(f => f.pose === pose)
     arr.sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
@@ -20,8 +21,9 @@ export default function PosePlayer({ atlas, sheetUrl, pose, fps = 8, scalePx = 2
   const cellH = atlas?.meta?.cell?.h ?? frames[0]?.frame?.h ?? 64
 
   const [playing, setPlaying] = useState(true)
-  const [frameIdx, setFrameIdx] = useState(0)
-  const [speed, setSpeed] = useState<number>(fps)
+  const [frameIdx, setFrameIdx] = useState(0)                  // 0-based
+  const [speed, setSpeed] = useState<number>(fps)              // FPS
+  const [zoom, setZoom] = useState<number>(scalePx)            // live zoom
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const sheetImgRef = useRef<HTMLImageElement | null>(null)
@@ -29,6 +31,7 @@ export default function PosePlayer({ atlas, sheetUrl, pose, fps = 8, scalePx = 2
   const lastTimeRef = useRef<number>(0)
   const accRef = useRef<number>(0)
 
+  // preload sheet
   useEffect(() => {
     const img = new Image()
     img.crossOrigin = 'anonymous'
@@ -41,28 +44,30 @@ export default function PosePlayer({ atlas, sheetUrl, pose, fps = 8, scalePx = 2
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sheetUrl])
 
+  // reset on pose change
   useEffect(() => { setFrameIdx(0) }, [pose])
 
+  // draw selected frame to canvas
   const draw = (idx: number) => {
     const cvs = canvasRef.current
     const img = sheetImgRef.current
     if (!cvs || !img || frames.length === 0) return
     const ctx = cvs.getContext('2d')
     if (!ctx) return
-
     const fr = frames[Math.max(0, Math.min(idx, frames.length - 1))]
     const { x, y, w, h } = fr.frame
 
-    const W = Math.round(cellW * scalePx)
-    const H = Math.round(cellH * scalePx)
+    const W = Math.round(cellW * zoom)
+    const H = Math.round(cellH * zoom)
     if (cvs.width !== W || cvs.height !== H) {
       cvs.width = W; cvs.height = H
-      ;(ctx as any).imageSmoothingEnabled = false
+      ;(ctx as any).imageSmoothingEnabled = false // crisp pixels
     }
     ctx.clearRect(0, 0, W, H)
     ctx.drawImage(img, x, y, w, h, 0, 0, W, H)
   }
 
+  // rAF loop with FPS control
   useEffect(() => {
     if (frames.length === 0) return
     const stepMs = 1000 / Math.max(1, speed)
@@ -92,9 +97,10 @@ export default function PosePlayer({ atlas, sheetUrl, pose, fps = 8, scalePx = 2
       accRef.current = 0
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing, speed, frames.length, sheetUrl, pose])
+  }, [playing, speed, frames.length, sheetUrl, pose, zoom])
 
-  useEffect(() => { draw(frameIdx) }, [frameIdx]) // eslint-disable-line
+  // redraw on manual scrub/zoom
+  useEffect(() => { draw(frameIdx) }, [frameIdx, zoom]) // eslint-disable-line
 
   if (frames.length === 0) {
     return <div className="text-sm text-amber-400">No frames for pose “{pose}”.</div>
@@ -144,17 +150,32 @@ export default function PosePlayer({ atlas, sheetUrl, pose, fps = 8, scalePx = 2
         </div>
       </div>
 
-      <div className="flex items-center gap-2 mb-2 text-xs opacity-80">
-        <span>Scrub</span>
-        <input
-          type="range"
-          min={1}
-          max={frames.length}
-          step={1}
-          value={frameIdx + 1}
-          onChange={(e) => { setPlaying(false); setFrameIdx(parseInt(e.target.value, 10) - 1) }}
-          className="flex-1"
-        />
+      {/* SCRUB + ZOOM */}
+      <div className="flex items-center gap-4 mb-2 text-xs opacity-80">
+        <div className="flex items-center gap-2 flex-1">
+          <span>Scrub</span>
+          <input
+            type="range"
+            min={1}
+            max={frames.length}
+            step={1}
+            value={frameIdx + 1}
+            onChange={(e) => { setPlaying(false); setFrameIdx(parseInt(e.target.value, 10) - 1) }}
+            className="flex-1"
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <span>Zoom</span>
+          <input
+            type="range"
+            min={1}
+            max={8}
+            step={0.5}
+            value={zoom}
+            onChange={(e) => setZoom(parseFloat(e.target.value))}
+          />
+          <span>{zoom.toFixed(1)}×</span>
+        </div>
       </div>
 
       <div className="flex items-center justify-center">

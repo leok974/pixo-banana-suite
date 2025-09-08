@@ -11,6 +11,7 @@ load_dotenv(env_path)
 
 # Import routers
 from app.routers import pipeline, edit, animate, agent_chat
+from app.routers import export_zip
 
 # Create FastAPI app
 app = FastAPI(title="Pixel Banana Suite API", version="1.0.0")
@@ -39,6 +40,7 @@ app.include_router(pipeline.router)
 app.include_router(edit.router)
 app.include_router(animate.router)
 app.include_router(agent_chat.router)
+app.include_router(export_zip.router, prefix="/export", tags=["export"])
 
 @app.get("/")
 def root():

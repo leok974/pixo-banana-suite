@@ -183,3 +183,29 @@ export type AtlasMeta = {
     src: string
   }>
 }
+
+// Download a zip of frames/sheet/gif/atlas
+export async function exportZip(body: {
+  by_pose?: Record<string, string[]>
+  frames?: string[]
+  sheet_path?: string
+  gif_path?: string
+  atlas_path?: string
+  basename?: string
+  include_frames?: boolean
+  include_sheet?: boolean
+  include_gif?: boolean
+  include_atlas?: boolean
+  meta?: any
+}): Promise<Blob> {
+  const resp = await fetch(`${API_BASE}/export/zip`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => '')
+    throw new Error(text || `${resp.status} ${resp.statusText}`)
+  }
+  return await resp.blob()
+}

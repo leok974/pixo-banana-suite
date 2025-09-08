@@ -1,6 +1,7 @@
 ﻿// apps/web/src/components/ChatDock.tsx
 import { useEffect, useMemo, useRef, useState } from "react"
 import { pingAPI, fetchRoots, postPoses, postEdit, postAnimate } from "../lib/api"
+import { exportZip } from '@/lib/api'
 import AtlasViewer from './AtlasViewer'
 import PosePlayer from './PosePlayer'
 import type { AtlasMeta } from '@/lib/api'
@@ -34,9 +35,15 @@ export function ChatDock() {
   const [preview, setPreview] = useState<{sheet?: string; gif?: string} | null>(null)
   const [lastByPose, setLastByPose] = useState<Record<string, string[]> | null>(null)
   const [lastAtlas, setLastAtlas] = useState<AtlasMeta | null>(null)
+  const [lastAtlasPath, setLastAtlasPath] = useState<string | null>(null)
   const [lastSheetUrl, setLastSheetUrl] = useState<string | null>(null)
+  const [lastGifUrl, setLastGifUrl] = useState<string | null>(null)
   const [gifPose, setGifPose] = useState<string | null>(null)
   const [poseFilter, setPoseFilter] = useState<string | null>(null)
+  const [zipFrames, setZipFrames] = useState(true)
+  const [zipSheet,  setZipSheet]  = useState(true)
+  const [zipGif,    setZipGif]    = useState(true)
+  const [zipAtlas,  setZipAtlas]  = useState(true)
 
   // Pose selection state
   const POSE_LIST = [
@@ -137,6 +144,14 @@ export function ChatDock() {
           setPoseFilter(first || null)
         }
         if ((r as any)?.atlas) setLastAtlas((r as any).atlas as AtlasMeta)
+        if ((r as any)?.atlas_path) setLastAtlasPath((r as any).atlas_path as string)
+        // capture gif url/path for export convenience
+        if ((r as any)?.urls?.gif) {
+          setLastGifUrl((r as any).urls.gif as string)
+        } else if ((r as any)?.gif) {
+          const g = (r as any).gif as string
+          setLastGifUrl(g.startsWith('/') ? g : `/view/${g.split('/').pop()}`)
+        }
         // Build reliable sheet URL (absolute when API_BASE exists)
         if ((r as any)?.urls?.sprite_sheet) {
           const raw = (r as any).urls.sprite_sheet as string
@@ -211,6 +226,7 @@ export function ChatDock() {
         const r = await postAnimate(payload as any)
         const item = (r as any)?.items?.[0]
         if (item?.atlas) setLastAtlas(item.atlas as AtlasMeta)
+        if (item?.atlas_path) setLastAtlasPath(item.atlas_path as string)
         // Build reliable sheet URL after /animate
         if (item?.urls?.sprite_sheet) {
           const raw: string = item.urls.sprite_sheet
@@ -222,6 +238,13 @@ export function ChatDock() {
           const rel = (item.sprite_sheet as string).replace(/^assets\/outputs\//, '')
           const url = API_BASE ? new URL(`/view/${rel}`, API_BASE).toString() : `/view/${rel}`
           setLastSheetUrl(url)
+        }
+        // capture gif url/path for export convenience
+        if (item?.urls?.gif) {
+          setLastGifUrl(item.urls.gif as string)
+        } else if (item?.gif) {
+          const g = item.gif as string
+          setLastGifUrl(g.startsWith('/') ? g : `/view/${g.split('/').pop()}`)
         }
         if (item?.gif || item?.sprite_sheet) {
           return [
@@ -275,6 +298,14 @@ export function ChatDock() {
           setGifPose(first || null)
         }
         if ((r as any)?.atlas) setLastAtlas((r as any).atlas as AtlasMeta)
+        if ((r as any)?.atlas_path) setLastAtlasPath((r as any).atlas_path as string)
+        // capture gif url/path for export convenience
+        if ((r as any)?.urls?.gif) {
+          setLastGifUrl((r as any).urls.gif as string)
+        } else if ((r as any)?.gif) {
+          const g = (r as any).gif as string
+          setLastGifUrl(g.startsWith('/') ? g : `/view/${g.split('/').pop()}`)
+        }
         // Build reliable sheet URL in NL flow too
         if ((r as any)?.urls?.sprite_sheet) {
           const raw = (r as any).urls.sprite_sheet as string
@@ -332,6 +363,37 @@ export function ChatDock() {
     } finally {
       setSending(false)
     }
+  }
+
+  // Export ZIP: frames + sheet + gif + atlas
+  async function onExportZip() {
+    if (!lastAtlas && !lastSheetUrl && !lastByPose) return
+    function toViewPath(u?: string | null): string | undefined {
+      if (!u) return undefined
+      try {
+        const url = new URL(u, window.location.origin)
+        return url.pathname.startsWith('/view/') ? url.pathname : u
+      } catch { return u }
+    }
+    const payload = {
+      by_pose: lastByPose || undefined,
+      sheet_path: toViewPath(lastSheetUrl),
+      gif_path:   toViewPath(lastGifUrl),
+      atlas_path: toViewPath(lastAtlasPath || (lastSheetUrl ? lastSheetUrl.replace(/\.png$/i, '.json') : undefined)),
+      basename: 'pixel-banana',
+      include_frames: zipFrames,
+      include_sheet:  zipSheet,
+      include_gif:    zipGif,
+      include_atlas:  zipAtlas,
+      meta: lastAtlas?.meta || undefined,
+    } as const
+    const blob = await exportZip(payload)
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${payload.basename}.zip`
+    a.click()
+    URL.revokeObjectURL(url)
   }
 
   return (
@@ -545,7 +607,7 @@ export function ChatDock() {
                     ))}
                   </select>
                   <button
-                    className="ml-auto px-3 py-1.5 rounded-lg border border-zinc-700 hover:bg-zinc-800"
+                    className="px-3 py-1.5 rounded-lg border border-zinc-700 hover:bg-zinc-800"
                     onClick={() => {
                       if (!lastAtlas) return
                       const blob = new Blob([JSON.stringify(lastAtlas, null, 2)], { type: 'application/json' })
@@ -558,6 +620,32 @@ export function ChatDock() {
                     }}
                   >
                     Download atlas JSON
+                  </button>
+                  <div className="flex items-center gap-3 ml-auto text-xs">
+                    <label className="flex items-center gap-1">
+                      <input type="checkbox" checked={zipFrames} onChange={(e)=> setZipFrames(e.target.checked)} />
+                      Frames
+                    </label>
+                    <label className="flex items-center gap-1">
+                      <input type="checkbox" checked={zipSheet} onChange={(e)=> setZipSheet(e.target.checked)} />
+                      Sheet
+                    </label>
+                    <label className="flex items-center gap-1">
+                      <input type="checkbox" checked={zipGif} onChange={(e)=> setZipGif(e.target.checked)} />
+                      GIF
+                    </label>
+                    <label className="flex items-center gap-1">
+                      <input type="checkbox" checked={zipAtlas} onChange={(e)=> setZipAtlas(e.target.checked)} />
+                      Atlas
+                    </label>
+                  </div>
+                  <button
+                    className="px-3 py-1.5 rounded-lg border border-zinc-700 hover:bg-zinc-800"
+                    onClick={onExportZip}
+                    title="Zip frames + sheet + gif + atlas"
+                    disabled={!zipFrames && !zipSheet && !zipGif && !zipAtlas}
+                  >
+                    Export ZIP
                   </button>
                 </div>
               </div>

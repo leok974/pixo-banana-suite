@@ -1,0 +1,131 @@
+{
+  "meta": {
+    "app": "Pixel Banana Suite",
+    "image": "1_sheet.png",
+    "size": {
+      "w": 2424,
+      "h": 1296
+    },
+    "scale": "1",
+    "cell": {
+      "w": 808,
+      "h": 1296
+    },
+    "fixed_cell": false,
+    "columns": 3
+  },
+  "frames": [
+    {
+      "filename": "1/1_idle_01.png",
+      "pose": "idle",
+      "index": 1,
+      "frame": {
+        "x": 0,
+        "y": 0,
+        "w": 808,
+        "h": 1296
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 808,
+        "h": 1296
+      },
+      "sourceSize": {
+        "w": 808,
+        "h": 1296
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "src": "C:/pixel-banana-suite/assets/outputs/1_idle_01.png"
+    },
+    {
+      "filename": "1/1_idle_02.png",
+      "pose": "idle",
+      "index": 2,
+      "frame": {
+        "x": 808,
+        "y": 0,
+        "w": 808,
+        "h": 1296
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 808,
+        "h": 1296
+      },
+      "sourceSize": {
+        "w": 808,
+        "h": 1296
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "src": "C:/pixel-banana-suite/assets/outputs/1_idle_02.png"
+    },
+    {
+      "filename": "1/1_idle_03.png",
+      "pose": "idle",
+      "index": 3,
+      "frame": {
+        "x": 1616,
+        "y": 0,
+        "w": 808,
+        "h": 1296
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 808,
+        "h": 1296
+      },
+      "sourceSize": {
+        "w": 808,
+        "h": 1296
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "src": "C:/pixel-banana-suite/assets/outputs/1_idle_03.png"
+    },
+    {
+      "filename": "1/1_idle_04.png",
+      "pose": "idle",
+      "index": 4,
+      "frame": {
+        "x": 2424,
+        "y": 0,
+        "w": 808,
+        "h": 1296
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 808,
+        "h": 1296
+      },
+      "sourceSize": {
+        "w": 808,
+        "h": 1296
+      },
+      "pivot": {
+        "x": 0.5,
+        "y": 0.5
+      },
+      "src": "C:/pixel-banana-suite/assets/outputs/1_idle_04.png"
+    }
+  ]
+}
