@@ -19,26 +19,26 @@ app = FastAPI(title="Pixel Banana Suite API", version="1.0.0")
 ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-    "http://localhost:5174", 
-    "http://127.0.0.1:5174",
 ]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
+    allow_credentials=True,          # ok for dev; don't use with allow_origins=["*"]
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],           # optional: expose custom headers
+    max_age=600,                     # optional: cache preflight 10 min
 )
+
+# Optional: Static file serving for artifacts (before routers)
+app.mount("/view", StaticFiles(directory="assets/outputs"), name="view")
 
 # Include routers
 app.include_router(pipeline.router)
 app.include_router(edit.router)
 app.include_router(animate.router)
 app.include_router(agent_chat.router)
-
-# Optional: Static file serving for artifacts
-# app.mount("/view", StaticFiles(directory="assets/outputs"), name="view")
 
 @app.get("/")
 def root():
