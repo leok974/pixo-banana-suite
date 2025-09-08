@@ -109,11 +109,23 @@ export function postEdit(body: {
   })
 }
 
-export function postAnimate(body: {
-  items: Array<{ frames: string[]; basename: string; fps?: number; sheet_cols?: number }>
-}) {
+export async function postAnimate(body: {
+  items: {
+    // Either frames OR by_pose (preferred)
+    frames?: string[]
+    by_pose?: Record<string, string[]>
+    pose_for_gif?: string
+    fps?: number
+    sheet_cols?: number
+    basename: string
+    fixed_cell?: boolean
+    cell_w?: number
+    cell_h?: number
+  }[]
+}): Promise<any> {
   return request('/animate', {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
 }

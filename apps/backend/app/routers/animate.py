@@ -1,35 +1,80 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict
 import time
 from pathlib import Path
+from app.services.anim_utils import create_sprite_sheet, create_gif, normalize_frame_numbers, apply_renames
 
 router = APIRouter()
 
+
 class AnimateItemModel(BaseModel):
-    frames: List[str]
-    fps: Optional[int] = 8
-    sheet_cols: Optional[int] = 4
-    basename: str
+  # Either provide flat frames OR by_pose (preferred)
+  frames: Optional[List[str]] = None
+  by_pose: Optional[Dict[str, List[str]]] = None
+  pose_for_gif: Optional[str] = None
+  fps: Optional[int] = 8
+  sheet_cols: Optional[int] = 4
+  basename: str
+  # Sprite sheet options
+  fixed_cell: Optional[bool] = None
+  cell_w: Optional[int] = None
+  cell_h: Optional[int] = None
+  normalize_existing: Optional[bool] = True
+
 
 class AnimateRequest(BaseModel):
-    items: List[AnimateItemModel]
+  items: List[AnimateItemModel]
+
 
 @router.post("/animate")
 def animate(req: AnimateRequest):
-    """Create animations from frames - stub implementation"""
-    results = []
-    
-    for item in req.items:
-        # Normalize Windows paths in frames
-        frames = [f.replace("\\", "/") for f in item.frames]
-        
-        result = {
-            "sprite_sheet": f"assets/outputs/{item.basename}_sheet.png",
-            "gif": f"assets/outputs/{item.basename}.gif",
-            "basename": item.basename,
-            "frames_used": len(frames)
-        }
-        results.append(result)
-    
-    return {"items": results}
+  """Create sprite sheet (row-per-pose) and GIF (from chosen pose or first available)."""
+  results = []
+
+  for item in req.items:
+    out_dir = Path("assets/outputs")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Resolve by_pose map
+    if item.by_pose:
+      by_pose = {k: [p.replace("\\", "/") for p in v] for k, v in item.by_pose.items()}
+    else:
+      # fallback: wrap flat frames into a single "all" pose row
+      frames = [f.replace("\\", "/") for f in (item.frames or [])]
+      by_pose = {"all": frames}
+
+    # Normalize numbering if requested (best effort)
+    if item.normalize_existing:
+      norm_map, rename_map = normalize_frame_numbers(by_pose, start_index=1, pad=2)
+      apply_renames(rename_map)
+      by_pose = norm_map
+
+    # Build sprite sheet (row-per-pose)
+    sheet_path = (out_dir / f"{item.basename}_sheet.png").as_posix()
+    create_sprite_sheet(
+      by_pose,
+      out_sheet_path=sheet_path,
+      sheet_cols=item.sheet_cols or 4,
+      fixed_cell=bool(item.fixed_cell),
+      cell_w=item.cell_w,
+      cell_h=item.cell_h,
+    )
+
+    # Pick which pose to animate into GIF
+    gif_pose = item.pose_for_gif or next((k for k, v in by_pose.items() if v), None)
+    gif_frames = by_pose.get(gif_pose, [])
+    gif_path = (out_dir / f"{item.basename}.gif").as_posix()
+    if gif_frames:
+      create_gif(gif_frames, gif_path, fps=item.fps or 8)
+
+    results.append({
+      "basename": item.basename,
+      "sprite_sheet": sheet_path,
+      "gif": gif_path,
+      "gif_pose": gif_pose,
+      "frames_used": sum(len(v) for v in by_pose.values()),
+      "poses": list(by_pose.keys()),
+    })
+
+  return {"items": results}

@@ -17,8 +17,9 @@
     "noFallthroughCasesInSwitch": true,
     "paths": {
       "@/*": ["./src/*"]
-    }
+    },
+    "types": ["vite/client"]          // ⬅️ add this line
   },
-  "include": ["src"],
-  "references": [{ "path": "./tsconfig.app.json" }]
+  "include": ["src"]                  // ⬅️ keep includes
+  /* removed "references" to tsconfig.app.json */
 }

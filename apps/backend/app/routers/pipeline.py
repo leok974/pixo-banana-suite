@@ -1,15 +1,23 @@
 # apps/backend/app/routers/pipeline.py
 from fastapi import APIRouter, Query, HTTPException
 from pydantic import BaseModel
-from typing import List, Literal, Optional, Any, Dict
+from typing import List, Literal, Optional, Any, Dict, Tuple
 from pathlib import Path
+from PIL import Image
 import time
 import os
 import traceback
 
 from app.services.nano_banana import NanoBanana, EditItem
 from app.services.pose_maker import make_local_pose_frames
-from app.services.anim_utils import build_spritesheet, build_gif
+from app.services.anim_utils import (
+    create_sprite_sheet,
+    create_gif,
+    normalize_frame_numbers,
+    apply_renames,
+)
+from collections import defaultdict
+import re
 
 router = APIRouter(prefix="/pipeline", tags=["pipeline"])
 
@@ -55,35 +63,83 @@ def roots():
         "comfy": check_dir(os.getenv("COMFY_OUT", "C:/ComfyUI/outputs"))
     }
 
+def _kind_for_path(p: Path) -> str:
+    name = p.name.lower()
+    if name.endswith(".gif"):
+        return "gif"
+    if "sheet" in name and name.endswith((".png", ".webp")):
+        return "sprite_sheet"
+    return "image"
+
+def _dir_times(dir_path: Path) -> Tuple[float, float]:
+    """(created_at, updated_at) from files; fallback to now."""
+    now = time.time()
+    mtimes = [f.stat().st_mtime for f in dir_path.rglob("*") if f.is_file()]
+    if not mtimes:
+        return (now, now)
+    return (min(mtimes), max(mtimes))
+
 @router.get("/status")
 def status(
-    limit: int = Query(25, ge=1, le=100),
-    include: Literal["all", "inputs", "outputs", "comfy"] = Query("all"),
+    limit: int = Query(25, ge=1, le=200),
     resolve_urls: bool = Query(False)
 ):
-    now = int(time.time())
-    items = []
-    for idx in range(min(limit, 8)):
-        job_time = now - (60 * (idx + 1))
-        job_id = f"demo-{job_time}"
-        files = [
-            {"kind": "gif", "path": f"assets/outputs/demo_{idx}/anim.gif", "url": f"/view/demo_{idx}/anim.gif" if resolve_urls else None}
-        ]
-        if idx % 2 == 0:
-            files.append({"kind": "sprite_sheet", "path": f"assets/outputs/demo_{idx}/sheet.png", "url": f"/view/demo_{idx}/sheet.png" if resolve_urls else None})
-        items.append({
-            "job_id": job_id,
+    """
+    Get recent jobs by scanning assets/outputs.
+    Each immediate subdirectory under outputs is a 'job'.
+    Flat files at outputs/ root are grouped under job_id='outputs-root'.
+    """
+    base = Path("assets/outputs")
+    base.mkdir(parents=True, exist_ok=True)
+
+    jobs: List[Dict[str, Any]] = []
+
+    # 1) Subdirectories as jobs
+    for sub in base.iterdir():
+        if sub.is_dir():
+            created_at, updated_at = _dir_times(sub)
+            files = []
+            for f in sub.rglob("*"):
+                if f.is_file():
+                    rel = f.as_posix()
+                    files.append({
+                        "kind": _kind_for_path(f),
+                        "path": rel,
+                        "url": ("/view/" + os.path.relpath(f, base).replace("\\", "/")) if resolve_urls else None,
+                    })
+            jobs.append({
+                "job_id": sub.name,
+                "source": "outputs",
+                "created_at": created_at,
+                "updated_at": updated_at,
+                "files": files,
+            })
+
+    # 2) Root-level files as a single job (optional)
+    root_files = [f for f in base.iterdir() if f.is_file()]
+    if root_files:
+        c, u = _dir_times(base)
+        jobs.append({
+            "job_id": "outputs-root",
             "source": "outputs",
-            "created_at": job_time,
-            "updated_at": job_time + 50,
-            "files": files
+            "created_at": c,
+            "updated_at": u,
+            "files": [{
+                "kind": _kind_for_path(f),
+                "path": f.as_posix(),
+                "url": ("/view/" + f.name) if resolve_urls else None,
+            } for f in root_files],
         })
-    return items
+
+    # Newest first
+    jobs.sort(key=lambda j: j["updated_at"], reverse=True)
+    return jobs[:limit]
 
 # ---------- EDIT -> POSE -> ANIMATE PIPELINE ----------
 
 class PoseSpec(BaseModel):
     name: str
+    frames: Optional[int] = None  # per-pose frame count (fan-out)
 
 class PosesPipelineRequest(BaseModel):
     image_path: str                 # original image to edit
@@ -93,6 +149,14 @@ class PosesPipelineRequest(BaseModel):
     sheet_cols: Optional[int] = 3
     out_dir: Optional[str] = "assets/outputs"
     basename: Optional[str] = None  # if omitted, we create one from the file name
+    # NEW: fixed cell-size control
+    fixed_cell: Optional[bool] = False
+    cell_w: Optional[int] = None
+    cell_h: Optional[int] = None
+    # NEW: select which pose to animate into GIF (optional)
+    pose_for_gif: Optional[str] = None
+    # NEW: optionally normalize filenames on disk to 01-based 2-digit padded
+    normalize_existing: Optional[bool] = True
 
 @router.post("/poses")
 def poses_pipeline(req: PosesPipelineRequest):
@@ -129,32 +193,77 @@ def poses_pipeline(req: PosesPipelineRequest):
                 "debug": result.get("debug"),  # contains failure details if stub fallback
             }
 
-        # 2) Poses
-        pose_names = [p.name for p in req.poses]
-        frames_abs = make_local_pose_frames(edited_path, pose_names, out_dir, base)
+        # 2) Poses: fan-out strictly 01-based frame names and write stub frames
+        pose_frame_map: Dict[str, List[str]] = {}
+        all_frames: List[str] = []
+        im_src = Image.open(edited_path).convert("RGBA")
+        for spec in req.poses:
+            n = int(spec.frames) if (spec.frames and spec.frames > 0) else 4
+            frames_for_pose: List[str] = []
+            for i in range(1, n + 1):
+                fname = f"{base}_{spec.name}_{i:02d}.png"
+                fpath = (out_dir / fname).as_posix()
+                # Write a stub duplicate so downstream sheet/GIF can be created
+                im_src.save(fpath)
+                frames_for_pose.append(fpath)
+                all_frames.append(fpath)
+            pose_frame_map[spec.name] = frames_for_pose
 
-        # 3) Artifacts
-        sheet_path = build_spritesheet(frames_abs, out_dir, base, cols=req.sheet_cols or 3)
-        gif_path   = build_gif(frames_abs, out_dir, base, fps=req.fps or 8)
+        # Optionally normalize existing filenames on disk and update map
+        if req.normalize_existing:
+            norm_map, rename_map = normalize_frame_numbers(pose_frame_map, start_index=1, pad=2)
+            apply_renames(rename_map)
+            pose_frame_map = norm_map
+
+        # Build standardized sheet (row-per-pose)
+        use_fixed = bool(req.fixed_cell and req.cell_w and req.cell_h)
+        frame_size = (int(req.cell_w), int(req.cell_h)) if use_fixed else None
+        sheet_path_str = (out_dir / f"{base}_sheet.png").as_posix()
+        create_sprite_sheet(
+            {k: list(v) for k, v in pose_frame_map.items()},
+            out_sheet_path=sheet_path_str,
+            sheet_cols=req.sheet_cols or 3,
+            fixed_cell=use_fixed,
+            cell_w=frame_size[0] if frame_size else None,
+            cell_h=frame_size[1] if frame_size else None,
+        )
+
+        # Choose which pose to animate (request override or first non-empty)
+        pose_for_gif = (req.pose_for_gif or next((k for k, v in pose_frame_map.items() if v), None)) or next(iter(pose_frame_map.keys()))
+        gif_path_str = (out_dir / f"{base}.gif").as_posix()
+        if pose_frame_map.get(pose_for_gif):
+            create_gif(pose_frame_map[pose_for_gif], gif_path_str, fps=req.fps or 8)
 
         def rel(p: Path) -> str:
             return str(p.relative_to(Path.cwd()))
 
-        rel_frames = [rel(Path(f)) for f in frames_abs]
-        rel_sheet  = rel(Path(sheet_path))
-        rel_gif    = rel(Path(gif_path))
+        # Use the (possibly normalized) map to build the flat list of frames
+        flat_frames = [p for v in pose_frame_map.values() for p in v]
+        rel_frames = [rel(Path(f)) for f in flat_frames]
+        rel_sheet = rel(Path(sheet_path_str))
+        rel_gif = rel(Path(gif_path_str))
 
         def to_url(relpath: str) -> str:
             p = Path(relpath)
             return f"/view/{p.relative_to('assets/outputs')}".replace("\\", "/")
 
+        # by-pose map with relative paths (for UI to reuse)
+        rel_by_pose: Dict[str, List[str]] = {k: [rel(Path(p)) for p in v] for k, v in pose_frame_map.items()}
+
         payload = {
             "job_id": f"poses-{int(time.time())}-{base}",
             "frames": rel_frames,
+            "by_pose": rel_by_pose,
             "sprite_sheet": rel_sheet,
             "gif": rel_gif,
+            "gif_pose": pose_for_gif,
             "basename": base,
             "edit_info": edit_info,
+            "sheet_options": {
+                "fixed_cell": use_fixed,
+                "cell_w": frame_size[0] if frame_size else None,
+                "cell_h": frame_size[1] if frame_size else None
+            },
             "urls": {
                 "frames": [to_url(f) for f in rel_frames],
                 "sprite_sheet": to_url(rel_sheet),

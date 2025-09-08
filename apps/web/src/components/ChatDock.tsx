@@ -27,6 +27,8 @@ export function ChatDock() {
   const [cellH, setCellH] = useState(128)
   const [preset, setPreset] = useState<"auto"|"64"|"96"|"128"|"256"|"custom">("auto")
   const [preview, setPreview] = useState<{sheet?: string; gif?: string} | null>(null)
+  const [lastByPose, setLastByPose] = useState<Record<string, string[]> | null>(null)
+  const [gifPose, setGifPose] = useState<string | null>(null)
 
   // Pose selection state
   const POSE_LIST = [
@@ -117,6 +119,12 @@ export function ChatDock() {
           cell_h: isFixed ? cellH : undefined,
         })
         setPreview({ sheet: (r as any)?.urls?.sprite_sheet, gif: (r as any)?.urls?.gif })
+        if ((r as any)?.by_pose) {
+          const bp = (r as any).by_pose as Record<string, string[]>
+          setLastByPose(bp)
+          const first = Object.keys(bp)[0]
+          setGifPose(first || null)
+        }
         const u = (r as any)?.edit_info?.used_model
         const reason = (r as any)?.edit_info?.reason
         const edited = (r as any)?.edit_info?.edited_path
@@ -153,24 +161,36 @@ export function ChatDock() {
       key: "animate",
       label: "Animate",
       run: async () => {
-        const r = await postAnimate({
-          items: [{
-            frames: [
-              "assets/inputs/1.png",
-              "assets/inputs/2.png",
-              "assets/inputs/3.png"
-            ],
-            fps: 8,
-            sheet_cols: 4,
-            basename: "test_anim"
-          }]
-        })
+        const payload = lastByPose
+          ? {
+              items: [{
+                by_pose: lastByPose!,
+                pose_for_gif: gifPose ?? undefined,
+                fps: 8,
+                sheet_cols: 4,
+                basename: "pb_anim",
+                ...(isFixed ? { fixed_cell: true, cell_w: cellW, cell_h: cellH } : {}),
+              }]
+            }
+          : {
+              items: [{
+                frames: [
+                  "assets/inputs/1.png",
+                  "assets/inputs/2.png",
+                  "assets/inputs/3.png",
+                ],
+                fps: 8,
+                sheet_cols: 4,
+                basename: "pb_anim",
+              }]
+            }
+        const r = await postAnimate(payload as any)
         const item = (r as any)?.items?.[0]
-        if (item?.urls?.gif || item?.urls?.sprite_sheet) {
+        if (item?.gif || item?.sprite_sheet) {
           return [
             "Animate → done",
-            item?.urls?.sprite_sheet ? `sheet: ${item.urls.sprite_sheet}` : "",
-            item?.urls?.gif ? `gif: ${item.urls.gif}` : ""
+            item?.sprite_sheet ? `sheet: ${item.sprite_sheet}` : "",
+            item?.gif ? `gif: ${item.gif}` : ""
           ].filter(Boolean).join("\n")
         }
         return "Animate → " + JSON.stringify(r)
@@ -211,6 +231,12 @@ export function ChatDock() {
 
         const r = await postPoses(payload)
         setPreview({ sheet: (r as any)?.urls?.sprite_sheet, gif: (r as any)?.urls?.gif })
+        if ((r as any)?.by_pose) {
+          const bp = (r as any).by_pose as Record<string, string[]>
+          setLastByPose(bp)
+          const first = Object.keys(bp)[0]
+          setGifPose(first || null)
+        }
         const u = (r as any)?.edit_info?.used_model
         const reason = (r as any)?.edit_info?.reason
         const edited = (r as any)?.edit_info?.edited_path
@@ -379,6 +405,24 @@ export function ChatDock() {
                 These poses will be used by “Make Poses” and by natural text commands that trigger posing.
               </div>
             </div>
+
+            {/* GIF pose selector (after /poses) */}
+            {lastByPose && (
+              <div className="rounded-lg border border-zinc-800 p-3 bg-zinc-950/50 space-y-2">
+                <label className="flex items-center gap-2 text-sm">
+                  <span className="font-medium">GIF pose</span>
+                  <select
+                    className="rounded bg-zinc-900 border border-zinc-700 px-2 py-1"
+                    value={gifPose ?? ''}
+                    onChange={(e) => setGifPose(e.target.value || null)}
+                  >
+                    {Object.keys(lastByPose).map(k => (
+                      <option key={k} value={k}>{k}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            )}
 
             {/* Message list */}
             <div ref={listRef} className="h-52 overflow-auto rounded-lg border border-zinc-800 bg-zinc-950/50 p-2">
